@@ -1,8 +1,24 @@
+"""CP2112 Battery Analyzer — main GUI entry point.
+
+This module implements the full PySide6 desktop application for reading,
+diagnosing, and repairing laptop battery packs via the Silicon Laboratories
+CP2112 HID-to-SMBus bridge and the Smart Battery System (SBS v1.1) protocol.
+"""
 import csv
 import json
 import logging
 import sys
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Package resource helpers
+# ---------------------------------------------------------------------------
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def _resource(filename: str) -> Path:
+    """Return the absolute path to a file bundled with this package."""
+    return _PACKAGE_DIR / filename
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFormLayout,
@@ -107,10 +123,17 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('NLBA Style CP2112 Battery Repair & SMBus Analyzer')
+        self.setWindowTitle('CP2112 Battery Analyzer — Smart Battery SMBus Tool v1.0')
         self.resize(1200, 900)
         self.device = None
         self._log_messages = []
+
+        # Application icon (bundled icon.ico / icon.png)
+        icon_path = _resource('icon.ico')
+        if not icon_path.exists():
+            icon_path = _resource('icon.png')
+        if icon_path.exists():
+            self.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
         # Auto-refresh timer (Live Monitoring)
         self.auto_refresh_timer = QtCore.QTimer(self)
@@ -122,12 +145,12 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
-        self._build_nlba_top_header(main_layout)
+        self._build_top_header(main_layout)
 
         self.tab_widget = QTabWidget()
         main_layout.addWidget(self.tab_widget, stretch=1)
 
-        self._build_nlba_dashboard_tab()
+        self._build_dashboard_tab()
         self._build_full_table_tab()
         self._build_advanced_battery_tab()
         self._build_cp2112_gpio_tab()
@@ -135,7 +158,7 @@ class MainWindow(QMainWindow):
         self._build_logs_tab()
 
         self._refresh_device_count()
-        self._append_log('NLBA Battery Repair Studio ready')
+        self._append_log('CP2112 Battery Analyzer ready')
 
     def _append_log(self, message, error=False):
         timestamp = QtCore.QDateTime.currentDateTime().toString('HH:mm:ss')
@@ -183,8 +206,8 @@ class MainWindow(QMainWindow):
             )
         return False
 
-    def _build_nlba_top_header(self, layout):
-        header = QGroupBox('NLBA Control Station - Adapter & Quick Commands')
+    def _build_top_header(self, layout):
+        header = QGroupBox('CP2112 Battery Analyzer — Adapter Control & Quick Commands')
         header.setStyleSheet('QGroupBox { font-weight: bold; border: 1px solid #007bff; border-radius: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #007bff; }')
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(10, 8, 10, 8)
@@ -216,7 +239,7 @@ class MainWindow(QMainWindow):
         header_layout.addStretch(1)
 
         # NLBA Main Action Buttons
-        self.btn_read_info = QPushButton('⚡ READ BATTERY INFO')
+        self.btn_read_info = QPushButton('⚡ READ BATTERY')
         self.btn_read_info.setStyleSheet('font-weight: bold; padding: 7px 14px; background-color: #28a745; color: white; border-radius: 4px; font-size: 13px;')
         self.btn_read_info.clicked.connect(self.on_refresh_basic_values)
         header_layout.addWidget(self.btn_read_info)
@@ -242,7 +265,7 @@ class MainWindow(QMainWindow):
         self.status_label.setStyleSheet('font-style: italic; color: #444; padding-left: 4px;')
         layout.addWidget(self.status_label)
 
-    def _build_nlba_dashboard_tab(self):
+    def _build_dashboard_tab(self):
         dash_tab = QWidget()
         tab_layout = QVBoxLayout(dash_tab)
         tab_layout.setContentsMargins(8, 8, 8, 8)
@@ -252,7 +275,7 @@ class MainWindow(QMainWindow):
         grid.setSpacing(10)
 
         # Card 1: SOC & State
-        soc_box = QGroupBox('🔋 State of Charge (SOC) & Health (SOH)')
+        soc_box = QGroupBox('🔋 State of Charge (SOC) & Health (SOH) — Live')
         soc_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #28a745; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #28a745; }')
         soc_layout = QVBoxLayout(soc_box)
         soc_layout.setContentsMargins(10, 10, 10, 10)
@@ -367,7 +390,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(chg_box, 1, 1)
 
         # Card 6: Chipset Info & Unseal Console
-        unseal_box = QGroupBox('🔓 NLBA Gas Gauge & Unseal Console')
+        unseal_box = QGroupBox('🔓 Gas Gauge Identification & Security Console')
         unseal_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #007bff; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #007bff; }')
         unseal_layout = QVBoxLayout(unseal_box)
         unseal_layout.setContentsMargins(10, 10, 10, 10)
@@ -419,7 +442,7 @@ class MainWindow(QMainWindow):
         tab_layout.addLayout(grid)
         tab_layout.addStretch(1)
 
-        self.tab_widget.addTab(dash_tab, '⚡ NLBA Battery Repair Dashboard')
+        self.tab_widget.addTab(dash_tab, '⚡ Battery Dashboard')
 
     def _build_full_table_tab(self):
         tab = QWidget()
@@ -431,7 +454,7 @@ class MainWindow(QMainWindow):
         ctrl_layout = QHBoxLayout(ctrl_bar)
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.read_all_table_btn = QPushButton('🔄 Read All Registers')
+        self.read_all_table_btn = QPushButton('🔄 Read All SBS Registers')
         self.read_all_table_btn.setStyleSheet('font-weight: bold; padding: 6px 12px; background-color: #28a745; color: white; border-radius: 4px;')
         self.read_all_table_btn.clicked.connect(self.on_read_all_registers_table)
 
@@ -522,7 +545,7 @@ class MainWindow(QMainWindow):
 
         self.battery_read_button = QPushButton('Read Register')
         self.battery_read_button.clicked.connect(self.on_read_battery_register)
-        self.battery_summary_button = QPushButton('Generate Full NLBA Report')
+        self.battery_summary_button = QPushButton('Generate Full Battery Report')
         self.battery_summary_button.clicked.connect(self.on_read_battery_summary)
         self.battery_export_button = QPushButton('Export Report (.txt)')
         self.battery_export_button.clicked.connect(self.on_export_battery_report)
@@ -552,10 +575,10 @@ class MainWindow(QMainWindow):
         form_layout.addRow('Last Read Value:', self.battery_last_value_label)
 
         group_layout.addLayout(form_layout)
-        group_layout.addWidget(QLabel('NLBA Battery Report Preview:'))
+        group_layout.addWidget(QLabel('Battery Report Preview:'))
         self.battery_report_widget = QPlainTextEdit()
         self.battery_report_widget.setReadOnly(True)
-        self.battery_report_widget.setPlaceholderText('Battery report will appear here...')
+        self.battery_report_widget.setPlaceholderText('Battery report will appear here after reading...')
         group_layout.addWidget(self.battery_report_widget, stretch=1)
 
         adv_layout.addWidget(group)
@@ -644,31 +667,46 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        guide_box = QGroupBox('📌 CP2112 Connection Guide & NLBA Battery Repair Cheat Sheet')
+        guide_box = QGroupBox('📌 CP2112 Connection Guide & Battery Repair Cheat Sheet')
         guide_layout = QVBoxLayout(guide_box)
 
         guide_text = QPlainTextEdit()
         guide_text.setReadOnly(True)
         guide_text.setPlainText(
             "========================================================================\n"
-            "   CP2112 ADAPTER TO LAPTOP BATTERY CONNECTION & UNSEAL GUIDE\n"
+            "  CP2112 Battery Analyzer — Connection Guide & Repair Cheat Sheet\n"
             "========================================================================\n\n"
-            "1. CP2112 HARDWARE PINOUT TO BATTERY CONECTIVITY:\n"
-            "   • CP2112 Pin SDA (Data)   ---> Battery Data (SDA) Pin\n"
-            "   • CP2112 Pin SCL (Clock)  ---> Battery Clock (SCL) Pin\n"
-            "   • CP2112 Pin GND (Ground) ---> Battery Ground (GND / -) Pin\n\n"
-            "2. WAKING UP DORMANT BATTERIES (SYSTEM PRESENT / PIN 4):\n"
-            "   • Modern laptop batteries do not output voltage on terminal pins if the BMS is in sleep mode.\n"
-            "   • To wake up dormant batteries: Connect the 'System Present' pin (usually Pin 4 / SysPres)\n"
-            "     to GND using a direct jumper wire or a 10k ohm resistor.\n\n"
-            "3. COMMON SMBUS ADDRESSES & GAS GAUGES:\n"
-            "   • Standard Laptop Battery Address: 0x0B (7-bit address) / 0x16 (8-bit write address)\n"
-            "   • Popular Gas Gauges: BQ20Z45, BQ20Z70, BQ20Z90, BQ30Z55, BQ40Z50, SN8030, MAX1781\n\n"
-            "4. DEFAULT UNSEAL KEYS REFERENCE:\n"
-            "   • Texas Instruments BQ20Zxx / BQ30xx: 0x0414 (Key1) / 0x3672 (Key2)\n"
-            "   • Generic / Standard Firmware Keys: 0x8000 (Key1) / 0x8000 (Key2)\n"
-            "   • Alternative TI Keys (BQ40xx): 0x3672 / 0x0414\n"
-            "   • Sony / Sanyo: 0x1122 / 0x3344\n"
+            "1. HARDWARE PINOUT — CP2112 Adapter to Laptop Battery:\n"
+            "   • CP2112 SDA (Data)   ──►  Battery SMBus Data  (SDA) Pin\n"
+            "   • CP2112 SCL (Clock)  ──►  Battery SMBus Clock (SCL) Pin\n"
+            "   • CP2112 GND (Ground) ──►  Battery Ground (GND / Negative) Pin\n\n"
+            "   NOTE: Use short wires (< 30 cm) and add 4.7 kΩ pull-up resistors on\n"
+            "         SDA and SCL if you get communication errors.\n\n"
+            "2. WAKING UP DORMANT / SLEEPING BATTERIES:\n"
+            "   • Many laptop batteries enter deep-sleep if disconnected for a long time.\n"
+            "     In this state the output pins carry no voltage and SMBus is unresponsive.\n"
+            "   • WAKE-UP METHOD: Briefly connect the 'System Present' pin (usually Pin 4,\n"
+            "     labelled SysPres, SMBC, or similar) to GND for ~2 seconds.\n"
+            "   • Alternatively, apply a short pulse of 5 V between B+ and B− for ~1 s.\n\n"
+            "3. COMMON SMBUS ADDRESSES & GAS GAUGE CHIPS:\n"
+            "   • Standard Laptop Battery Address : 0x0B  (7-bit) / 0x16 (8-bit write)\n"
+            "   • Texas Instruments BQ Series    : BQ20Z45, BQ20Z70, BQ20Z90, BQ30Z55,\n"
+            "                                      BQ40Z50, BQ40Z80\n"
+            "   • Maxim / Analog Devices          : MAX1781, MAX17055, DS2786\n"
+            "   • Renesas / Seiko                 : SN8030, R2J240, S-8530\n\n"
+            "4. UNSEAL KEY REFERENCE (write both Key1 then Key2 to ManufacturerAccess 0x00):\n"
+            "   • TI BQ20Zxx / BQ30xx (default) : Key1=0x0414  Key2=0x3672\n"
+            "   • TI BQ40xx / BQ2084            : Key1=0x3672  Key2=0x0414\n"
+            "   • Generic / Standard firmware   : Key1=0x8000  Key2=0x8000\n"
+            "   • Sony / Sanyo OEM firmware     : Key1=0x1122  Key2=0x3344\n"
+            "   • Full-access (if permitted)    : Key1=0xFFFF  Key2=0xFFFF\n\n"
+            "5. SEAL / LOCK COMMAND:\n"
+            "   • Write word 0x0020 to ManufacturerAccess (0x00) to re-seal the BMS.\n\n"
+            "6. TROUBLESHOOTING:\n"
+            "   • 'DEVICE_NOT_FOUND' error → Plug in the CP2112 USB dongle first.\n"
+            "   • 'Transfer timeout'       → Check SDA/SCL wiring; try pull-up resistors.\n"
+            "   • All registers return 0   → Battery may still be sleeping (see step 2).\n"
+            "   • Unseal has no effect     → Try the alternate TI key order (BQ40xx preset).\n"
         )
         guide_layout.addWidget(guide_text)
 
@@ -680,7 +718,7 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(log_tab)
         log_layout.setContentsMargins(8, 8, 8, 8)
 
-        group = QGroupBox('System Logs & Diagnostics')
+        group = QGroupBox('System Logs & CP2112 Diagnostics')
         group_layout = QVBoxLayout(group)
 
         controls = QWidget()
@@ -705,14 +743,14 @@ class MainWindow(QMainWindow):
         group_layout.addWidget(self.log_widget, stretch=1)
 
         log_layout.addWidget(group)
-        self.tab_widget.addTab(log_tab, '📜 Diagnostics & Logs')
+        self.tab_widget.addTab(log_tab, '📜 Diagnostics & Log')
 
     def _refresh_device_count(self):
         try:
             count = cp2112.find_devices()
             self.device_index_input.setMaximum(max(count - 1, 0))
             if count > 0:
-                self.conn_status_badge.setText(f'🟢 {count} Device(s) Found')
+                self.conn_status_badge.setText(f'🟢 {count} CP2112 Device(s) Found')
                 self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; padding: 5px 12px;')
             else:
                 self.conn_status_badge.setText('🔴 Disconnected (0 Devices)')
@@ -852,14 +890,14 @@ class MainWindow(QMainWindow):
             self.auto_refresh_timer.stop()
             self.auto_refresh_btn.setText('▶️ AUTO-MONITOR (OFF)')
             self.auto_refresh_btn.setStyleSheet('font-weight: bold; padding: 7px 12px; background-color: #6c757d; color: white; border-radius: 4px;')
-            self._set_status('Auto-monitoring stopped')
+            self._set_status('Live monitoring stopped')
         else:
             if not self._ensure_device_open():
                 return
             self.auto_refresh_timer.start(2000)
             self.auto_refresh_btn.setText('⏹️ STOP MONITORING')
             self.auto_refresh_btn.setStyleSheet('font-weight: bold; padding: 7px 12px; background-color: #dc3545; color: white; border-radius: 4px;')
-            self._set_status('NLBA Auto-monitoring active (2.0s interval)')
+            self._set_status('Live monitoring active — polling every 2.0 s')
 
     def _auto_refresh_tick(self):
         try:
@@ -874,11 +912,17 @@ class MainWindow(QMainWindow):
         try:
             if self.device is not None:
                 try:
-                    if cp2112.is_opened(self.device.device):
-                        self._set_status('Device is already open')
-                        return
+                    already_open = cp2112.is_opened(self.device.device)
                 except Exception:
+                    already_open = False
                     self.device = None
+
+                if already_open:
+                    # Device is already open — just refresh the badge so it
+                    # always shows the correct name/state after repeated clicks.
+                    self._update_device_info()
+                    self._set_status('Device already open — connection info refreshed')
+                    return
 
             index = self.device_index_input.value()
             self.device = cp2112.CP2112Device(index=index)
@@ -1163,8 +1207,8 @@ class MainWindow(QMainWindow):
     def on_refresh_basic_values(self):
         try:
             values = self._refresh_basic_values()
-            self._set_status('NLBA Battery info read successfully')
-            self._append_log('NLBA Battery read successful')
+            self._set_status('Battery data read successfully')
+            self._append_log('Battery read OK')
         except Exception as exc:
             self._append_log(f'Read battery info failed: {exc}', error=True)
 
@@ -1173,7 +1217,7 @@ class MainWindow(QMainWindow):
             if not self._ensure_device_open():
                 return
             address = self._resolve_battery_address()
-            self._set_status('Reading all SBS v1.1 registers...')
+            self._set_status('Reading all SBS v1.1 registers — please wait...')
 
             for row, (name, reg_addr) in enumerate(self.BATTERY_REGISTERS.items()):
                 try:
@@ -1187,14 +1231,14 @@ class MainWindow(QMainWindow):
                     self.reg_table.setItem(row, 2, QTableWidgetItem('Err'))
                     self.reg_table.setItem(row, 3, QTableWidgetItem(f'Error: {exc}'))
 
-            self._set_status('All registers read successfully')
-            self._append_log('Full SBS register table read completed')
+            self._set_status('All SBS registers read successfully')
+            self._append_log('Full SBS v1.1 register table read completed')
         except Exception as exc:
             self._append_log(f'Read register table failed: {exc}', error=True)
 
     def on_export_table_csv(self):
         try:
-            path, _ = QFileDialog.getSaveFileName(self, 'Save Table to CSV', str(Path.cwd() / 'nlba_battery_registers.csv'), 'CSV Files (*.csv)')
+            path, _ = QFileDialog.getSaveFileName(self, 'Save Register Table to CSV', str(Path.cwd() / 'cp2112_battery_registers.csv'), 'CSV Files (*.csv)')
             if not path:
                 return
             with open(path, 'w', newline='', encoding='utf-8') as f:
@@ -1241,7 +1285,7 @@ class MainWindow(QMainWindow):
             key1, key2 = UNSEAL_PRESETS.get(preset_name, (0x0414, 0x3672))
 
             self.device.unseal(address, key1=key1, key2=key2)
-            self._set_status(f'Unseal executed with default keys ({preset_name})')
+            self._set_status(f'Unseal sequence sent — preset: {preset_name}')
             self._append_log(f'Default Unseal executed: key1=0x{key1:04X}, key2=0x{key2:04X}')
             QMessageBox.information(
                 self,
@@ -1259,8 +1303,8 @@ class MainWindow(QMainWindow):
                 return
             address = self._resolve_battery_address()
             self.device.seal(address)
-            self._set_status('SEAL command sent to battery')
-            self._append_log('SEAL command sent to battery')
+            self._set_status('SEAL command sent to battery BMS')
+            self._append_log('SEAL command sent to battery BMS')
             QMessageBox.information(self, 'SEAL Battery', f'Security lock command (SEAL) sent to battery at 0x{address:02X}.')
         except Exception as exc:
             self._append_log(f'SEAL command failed: {exc}', error=True)
@@ -1272,10 +1316,12 @@ class MainWindow(QMainWindow):
             address = self._resolve_battery_address()
             lines = [
                 f'================================================================',
-                f'  FULL NLBA BATTERY REPAIR & DIAGNOSTICS REPORT (SMBUS)',
+                f'  CP2112 Battery Analyzer — Full Battery Diagnostics Report',
+                f'  Smart Battery System (SBS) v1.1 Register Dump',
                 f'================================================================',
-                f'Date: {QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")}',
-                f'I2C Address: 0x{address:02X}',
+                f'Date      : {QtCore.QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")}',
+                f'I2C Addr  : 0x{address:02X}',
+                f'Software  : CP2112 Battery Analyzer v1.0',
                 f'----------------------------------------------------------------'
             ]
             summary_regs = [
@@ -1301,8 +1347,8 @@ class MainWindow(QMainWindow):
 
             report = '\n'.join(lines)
             self.battery_report_widget.setPlainText(report)
-            self._set_status('NLBA Battery report generated')
-            self._append_log('Full NLBA report generated')
+            self._set_status('Battery diagnostics report generated')
+            self._append_log('Full battery report generated')
             self.on_refresh_basic_values()
         except Exception as exc:
             self._append_log(f'Generate report failed: {exc}', error=True)
@@ -1311,9 +1357,9 @@ class MainWindow(QMainWindow):
         try:
             text = self.battery_report_widget.toPlainText().strip()
             if not text:
-                QMessageBox.warning(self, 'Export Report', 'No report generated to export.')
+                QMessageBox.warning(self, 'Export Report', 'No report has been generated yet. Click "Generate Full Battery Report" first.')
                 return
-            path = self._write_text_file('nlba_battery_report', text)
+            path = self._write_text_file('cp2112_battery_report', text)
             if path:
                 self._set_status(f'Report exported to: {path}')
         except Exception as exc:
@@ -1333,9 +1379,17 @@ class MainWindow(QMainWindow):
             self._append_log(f'Export log failed: {exc}', error=True)
 
 
+APP_NAME = 'CP2112 Battery Analyzer'
+APP_VERSION = '1.0.0'
+
+
 def main():
+    """Entry point for the CP2112 Battery Analyzer standalone application."""
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
+    app.setOrganizationName('CP2112 Battery Analyzer')
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
