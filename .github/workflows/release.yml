@@ -1,4 +1,3 @@
-```yaml
 name: Release Builds
 
 on:
@@ -158,4 +157,3 @@ jobs:
 
             > The CP2112 Silicon Labs USB driver must be installed separately on Windows.
             > Download it from the Silicon Labs website.
-```
