@@ -1,4 +1,8 @@
+# CP2112 Battery Analyzer — Python dependencies
+# Install with:  pip install -r requirements.txt
 
-# Use Qt6 bindings (PySide6) for newer Qt support
+# Qt6 bindings (PySide6) — includes Qt base, widgets, and OpenGL
 PySide6>=6.5
 
+# Image processing — used to load/convert the app icon
+Pillow>=10.0
