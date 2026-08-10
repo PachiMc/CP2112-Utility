@@ -12,49 +12,38 @@ permissions:
 
 jobs:
 
-  # ═══════════════════════════════════════════════════════════════
-  # Build for each platform
-  # ═══════════════════════════════════════════════════════════════
-
   build:
     strategy:
       matrix:
         include:
           - os: windows-latest
             artifact_name: CP2112-Battery-Analyzer.exe
-            asset_name: CP2112-Battery-Analyzer-Windows.exe
 
           - os: ubuntu-latest
             artifact_name: CP2112-Battery-Analyzer
-            asset_name: CP2112-Battery-Analyzer-Linux
 
           - os: macos-latest
             artifact_name: CP2112-Battery-Analyzer.app
-            asset_name: CP2112-Battery-Analyzer-macOS.zip
 
     runs-on: ${{ matrix.os }}
 
     steps:
 
-      # ── 1. Checkout ───────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # ── 2. Linux dependencies ────────────────────────────────
       - name: Install system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -y
           sudo apt-get install -y libhidapi-dev libudev-dev
 
-      # ── 3. Python ─────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-          cache: 'pip'
+          cache: pip
 
-      # ── 4. Python dependencies ───────────────────────────────
       - name: Install Python dependencies
         working-directory: python
         run: |
@@ -62,31 +51,23 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # ── 5. Build ──────────────────────────────────────────────
       - name: Build with PyInstaller
         working-directory: python
         run: |
-          pyinstaller cp2112_analyzer.spec \
-            --distpath dist \
-            --workpath build \
-            --noconfirm
+          pyinstaller cp2112_analyzer.spec --distpath dist --workpath build --noconfirm
 
-      # ── 6. Zip macOS app ──────────────────────────────────────
       - name: Zip macOS application
         if: runner.os == 'macOS'
         working-directory: python/dist
         run: |
           zip -r CP2112-Battery-Analyzer-macOS.zip CP2112-Battery-Analyzer.app
 
-      # ── 7. Prepare release asset ──────────────────────────────
       - name: Prepare Windows asset
         if: runner.os == 'Windows'
         working-directory: python/dist
         shell: pwsh
         run: |
-          Copy-Item `
-            CP2112-Battery-Analyzer.exe `
-            CP2112-Battery-Analyzer-Windows.exe
+          Copy-Item CP2112-Battery-Analyzer.exe CP2112-Battery-Analyzer-Windows.exe
 
       - name: Prepare Linux asset
         if: runner.os == 'Linux'
@@ -95,7 +76,6 @@ jobs:
           cp CP2112-Battery-Analyzer CP2112-Battery-Analyzer-Linux
           chmod +x CP2112-Battery-Analyzer-Linux
 
-      # ── 8. Upload build artifact ──────────────────────────────
       - name: Upload Windows artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -118,21 +98,15 @@ jobs:
           path: python/dist/CP2112-Battery-Analyzer-macOS.zip
 
 
-  # ═══════════════════════════════════════════════════════════════
-  # Create GitHub Release
-  # ═══════════════════════════════════════════════════════════════
-
   release:
     needs: build
 
-    # A Release can only be created when running from a tag.
     if: startsWith(github.ref, 'refs/tags/')
 
     runs-on: ubuntu-latest
 
     steps:
 
-      # ── 1. Download all build artifacts ───────────────────────
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
@@ -151,7 +125,6 @@ jobs:
           name: CP2112-Battery-Analyzer-macOS
           path: release
 
-      # ── 2. Create GitHub Release ──────────────────────────────
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -159,12 +132,10 @@ jobs:
             release/CP2112-Battery-Analyzer-Windows.exe
             release/CP2112-Battery-Analyzer-Linux
             release/CP2112-Battery-Analyzer-macOS.zip
-
-          name: "CP2112 Battery Analyzer ${{ github.ref_name }}"
+          name: CP2112 Battery Analyzer ${{ github.ref_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
-
           body: |
             ## CP2112 Battery Analyzer ${{ github.ref_name }}
 
