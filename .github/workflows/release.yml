@@ -1,0 +1,98 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Verify Silicon Labs DLLs
+        shell: pwsh
+        working-directory: python
+        run: |
+          $required = @('SLABHIDtoSMBus.dll', 'SLABHIDDevice.dll')
+          $missing = $required | Where-Object { -not (Test-Path "vendor/$_") }
+          if ($missing) {
+            Write-Error @"
+          Missing DLLs in python/vendor/:
+            $($missing -join "`n  ")
+          Add both DLLs from the CP2112 SDK before creating a release tag.
+          See python/vendor/README.md
+          "@
+          }
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+
+      - name: Install dependencies
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build standalone executable
+        working-directory: python
+        run: pyinstaller packaging/cp2112_analyzer.spec --noconfirm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CP2112-Battery-Analyzer-Windows
+          path: python/dist/CP2112-Battery-Analyzer.exe
+
+  release:
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CP2112-Battery-Analyzer-Windows
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/CP2112-Battery-Analyzer.exe
+          name: CP2112 Battery Analyzer ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## CP2112 Battery Analyzer ${{ github.ref_name }}
+
+            Standalone Windows application for diagnosing and repairing laptop batteries
+            via the CP2112 HID-to-SMBus USB adapter.
+
+            ### Download
+
+            **`CP2112-Battery-Analyzer.exe`** — single-file executable, no Python or DLL installation required.
+
+            ### Requirements
+
+            - Windows 10/11 (64-bit)
+            - CP2112 USB adapter with [Silicon Labs USB driver](https://www.silabs.com/developers/usb-to-i2c-bridge?tab=downloads) installed
+
+            ### Quick start
+
+            1. Install the CP2112 USB driver from Silicon Labs.
+            2. Connect the CP2112 adapter and battery.
+            3. Double-click `CP2112-Battery-Analyzer.exe`.

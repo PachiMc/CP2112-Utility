@@ -1,0 +1,2 @@
+# CP2112 Battery Analyzer — Python dependencies
+PySide6>=6.11.1,<6.12

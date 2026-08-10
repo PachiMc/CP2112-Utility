@@ -1,0 +1,40 @@
+[project]
+name = "cp2112-battery-analyzer"
+version = "1.1.0"
+description = "Standalone desktop application for diagnosing and repairing laptop batteries via the CP2112 HID-to-SMBus USB adapter and SBS v1.1 protocol."
+readme = "../README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["battery", "smbus", "cp2112", "bms", "sbs", "diagnostics", "bq20z", "bq30z", "bq40z"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Hardware",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "PySide6>=6.11.1,<6.12",
+]
+
+[project.scripts]
+cp2112-analyzer = "pyreader.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pyreader"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"pyreader/icon.ico" = "pyreader/icon.ico"
+"pyreader/icon.png" = "pyreader/icon.png"
