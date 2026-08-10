@@ -2,7 +2,8 @@
 
 Standalone desktop application for diagnosing and repairing laptop batteries via the Silicon Labs **CP2112** HID-to-SMBus USB adapter and the Smart Battery System (SBS v1.1) protocol.
 
-<img width="1409" height="900" alt="image" src="https://github.com/user-attachments/assets/93a1b0c8-92d9-4dea-b846-aa3ea7d15584" />
+<img width="1409" height="900" alt="image" src="https://github.com/user-attachments/assets/40e46891-f147-494e-b39b-919c26743a4f" />
+
 
 ## Features
 
