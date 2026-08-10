@@ -21,6 +21,11 @@ if os.name == 'nt':
     for cand in candidates:
         try:
             if cand.exists():
+                if hasattr(os, 'add_dll_directory'):
+                    try:
+                        os.add_dll_directory(str(cand.parent))
+                    except Exception:
+                        pass
                 _dll = WinDLL(str(cand))
                 _dll_error = None
                 break
@@ -133,6 +138,7 @@ READ_TIMEOUT_MS = 1000
 TRANSFER_RETRIES = 0
 SCL_LOW_TIMEOUT = True
 RESPONSE_TIMEOUT_MS = 1000
+DEFAULT_SMART_BATTERY_UNSEAL_KEYS = (0x0414, 0x3672)  # TI BQ default unseal keys (key1=0x0414, key2=0x3672)
 
 # Status values
 HID_SMBUS_SUCCESS = 0x00
@@ -291,6 +297,16 @@ def _hex_to_bytes(text, min_len=1, max_len=HID_SMBUS_MAX_TARGET_ADDRESS_SIZE, na
     data = bytes.fromhex(text)
     _validate_length(len(data), min_len, max_len, f'{name} length')
     return data
+
+
+def _int_to_bytes(value, length=None, byteorder='little'):
+    if not isinstance(value, int) or value < 0:
+        raise CP2112Error('Value must be a non-negative integer')
+    if length is None:
+        length = 2 if value > 0xFF else 1
+    if value >= 1 << (8 * length):
+        raise CP2112Error(f'Value {value} does not fit in {length} bytes')
+    return value.to_bytes(length, byteorder)
 
 
 def _build_byte_buffer(data):
@@ -463,6 +479,27 @@ def write_request(device, slave_address, data):
     _validate_address(slave_address)
     data_bytes = _to_byte_array(data, min_len=HID_SMBUS_MIN_WRITE_REQUEST_SIZE, max_len=HID_SMBUS_MAX_WRITE_REQUEST_SIZE)
     status = _dll.HidSmbus_WriteRequest(device, BYTE(slave_address), _build_byte_buffer(data_bytes), BYTE(len(data_bytes)))
+    if status != HID_SMBUS_SUCCESS:
+        raise CP2112Error(f'HidSmbus_WriteRequest failed: {status} ({status_str(status)})')
+    return True
+
+
+def write_register(device, slave_address, register_address, data):
+    _check_dll()
+    _check_device(device)
+    _validate_address(slave_address)
+    if isinstance(register_address, int):
+        register_bytes = bytes([register_address])
+    elif isinstance(register_address, str):
+        register_bytes = _hex_to_bytes(register_address, min_len=1, max_len=HID_SMBUS_MAX_TARGET_ADDRESS_SIZE, name='register_address')
+    elif isinstance(register_address, (bytes, bytearray, list)):
+        register_bytes = bytes(register_address)
+    else:
+        raise CP2112Error('register_address must be an integer, hex string, bytes, or list[int]')
+    _validate_length(len(register_bytes), HID_SMBUS_MIN_TARGET_ADDRESS_SIZE, HID_SMBUS_MAX_TARGET_ADDRESS_SIZE, 'register_address')
+    data_bytes = _to_byte_array(data, min_len=1, max_len=HID_SMBUS_MAX_WRITE_REQUEST_SIZE - len(register_bytes), name='data')
+    payload = register_bytes + data_bytes
+    status = _dll.HidSmbus_WriteRequest(device, BYTE(slave_address), _build_byte_buffer(payload), BYTE(len(payload)))
     if status != HID_SMBUS_SUCCESS:
         raise CP2112Error(f'HidSmbus_WriteRequest failed: {status} ({status_str(status)})')
     return True
@@ -715,6 +752,26 @@ class CP2112Device:
         if transfer_status['status'] == HID_SMBUS_S0_ERROR:
             raise CP2112Error(f'Write failed: {transfer_status}')
         return transfer_status
+
+    def write_register(self, slave_address, register_address, data):
+        _validate_address(slave_address)
+        status = write_register(self.device, slave_address, register_address, data)
+        if status is not True:
+            return status
+        transfer_status = wait_for_transfer(self.device)
+        if transfer_status['status'] == HID_SMBUS_S0_ERROR:
+            raise CP2112Error(f'Register write failed: {transfer_status}')
+        return transfer_status
+
+    def unseal(self, slave_address, key1=DEFAULT_SMART_BATTERY_UNSEAL_KEYS[0], key2=DEFAULT_SMART_BATTERY_UNSEAL_KEYS[1]):
+        self.write_register(slave_address, 0x00, key1.to_bytes(2, 'little'))
+        time.sleep(0.05)
+        self.write_register(slave_address, 0x00, key2.to_bytes(2, 'little'))
+        return True
+
+    def seal(self, slave_address):
+        self.write_register(slave_address, 0x00, (0x0020).to_bytes(2, 'little'))
+        return True
 
     def read_register(self, slave_address, register_address, length=1):
         if isinstance(register_address, int):
