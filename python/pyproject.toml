@@ -1,6 +1,6 @@
 [project]
 name = "cp2112-battery-analyzer"
-version = "1.1.0"
+version = "1.2.0"
 description = "Standalone desktop application for diagnosing and repairing laptop batteries via the CP2112 HID-to-SMBus USB adapter and SBS v1.1 protocol."
 readme = "../README.md"
 license = { text = "MIT" }

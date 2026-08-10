@@ -10,10 +10,10 @@ Standalone desktop application for diagnosing and repairing laptop batteries via
 - **Raw SMBus I/O** — direct transfers and GPIO latch control
 - **Diagnostics & logs** — built-in DLL/device checks and exportable activity log
 - **Health assessment** — automatic warnings for SOH, cycles, cell imbalance, and protection flags
-- **Dark mode** — enabled by default (toggle in View menu)
+- **Dark / light mode** — theme-aware contrast in both modes (toggle in View menu)
 - **Clipboard snapshot** — copy full battery readout with one click
 - **Configurable polling** — auto-monitor interval from 1–60 seconds
-- **Connection guide** — pinout reference and unseal key cheat sheet
+- **Connection guide** — visual wiring diagram, wake-up steps, and unseal key table
 
 ## Download
 

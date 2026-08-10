@@ -12,7 +12,22 @@ from pathlib import Path
 
 from .paths import resource_path, user_data_dir
 from . import sbs
-from .theme import stylesheet
+from .theme import (
+    action_button_style,
+    badge_style,
+    badge_style_compact,
+    group_box_style,
+    health_alert_style,
+    muted_label_style,
+    pin_card_style,
+    progress_bar_style,
+    semantic_color,
+    soc_label_style,
+    status_label_style,
+    step_card_style,
+    stylesheet,
+    value_label_style,
+)
 
 
 def _resource(filename: str) -> Path:
@@ -78,7 +93,7 @@ UNSEAL_PRESETS = {
 }
 
 APP_NAME = 'CP2112 Battery Analyzer'
-APP_VERSION = '1.1.0'
+APP_VERSION = '1.2.0'
 
 
 class MainWindow(QMainWindow):
@@ -93,6 +108,12 @@ class MainWindow(QMainWindow):
         self.device = None
         self._log_messages = []
         self._last_battery_snapshot = ''
+        self._conn_badge_kind = 'danger'
+        self._dash_state_kind = 'idle'
+        self._soc_tier = 'success'
+        self._soh_bar_color = '#17a2b8'
+        self._delta_tier = 'success'
+        self._health_worst = 'info'
 
         # Application icon (bundled icon.ico / icon.png)
         icon_path = _resource('icon.ico')
@@ -168,7 +189,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.dark_mode_action)
 
         help_menu = menu_bar.addMenu('&Help')
-        help_menu.addAction('Connection Guide', lambda: self.tab_widget.setCurrentIndex(4))
+        help_menu.addAction('Connection Guide', self._show_guide_tab)
         help_menu.addAction('Run Diagnostics', self.on_diagnostic)
         help_menu.addAction('&About', self._show_about)
 
@@ -182,10 +203,84 @@ class MainWindow(QMainWindow):
         self._dark_mode = dark
         if hasattr(self, 'dark_mode_action'):
             self.dark_mode_action.setChecked(dark)
+        self._refresh_theme_styles()
 
     def _toggle_dark_mode(self, checked: bool):
         self._apply_theme(checked)
         self._settings.setValue('dark_mode', checked)
+
+    def _show_guide_tab(self):
+        for index in range(self.tab_widget.count()):
+            if 'Connection Guide' in self.tab_widget.tabText(index):
+                self.tab_widget.setCurrentIndex(index)
+                return
+
+    def _style_conn_badge(self, kind: str):
+        self._conn_badge_kind = kind
+        self.conn_status_badge.setStyleSheet(badge_style(kind, self._dark_mode))
+
+    def _style_auto_refresh_btn(self, active: bool):
+        color = '#dc3545' if active else '#6c757d'
+        self.auto_refresh_btn.setStyleSheet(action_button_style(color))
+
+    def _refresh_theme_styles(self):
+        if not hasattr(self, 'tab_widget'):
+            return
+
+        dark = self._dark_mode
+
+        self.header_group.setStyleSheet(group_box_style('blue', dark, border_width=1))
+        self._style_conn_badge(self._conn_badge_kind)
+        self.status_label.setStyleSheet(status_label_style(dark))
+
+        self.soc_box.setStyleSheet(group_box_style('green', dark))
+        self.vp_box.setStyleSheet(group_box_style('teal', dark))
+        self.cell_box.setStyleSheet(group_box_style('purple', dark))
+        self.cap_box.setStyleSheet(group_box_style('neutral', dark))
+        self.chg_box.setStyleSheet(group_box_style('orange', dark))
+        self.unseal_box.setStyleSheet(group_box_style('blue', dark))
+
+        self.btn_read_info.setStyleSheet(action_button_style('#28a745', large=True))
+        self.quick_unseal_btn.setStyleSheet(action_button_style('#007bff', large=True))
+        self.quick_seal_btn.setStyleSheet(action_button_style('#dc3545', large=True))
+        self._style_auto_refresh_btn(self.auto_refresh_timer.isActive())
+
+        self.dash_state_badge.setStyleSheet(badge_style_compact(self._dash_state_kind, dark))
+        self.dash_soc_label.setStyleSheet(soc_label_style(self._soc_tier, dark))
+        self.dash_soc_bar.setStyleSheet(progress_bar_style(semantic_color(self._soc_tier, dark), dark))
+        self.dash_soh_label.setStyleSheet(value_label_style(color=semantic_color('success', dark)))
+        self.dash_soh_bar.setStyleSheet(progress_bar_style(self._soh_bar_color, dark, height=18))
+        self.dash_last_update_label.setStyleSheet(muted_label_style(dark))
+
+        for widget in (
+            self.dash_voltage_label, self.dash_current_label, self.dash_power_label,
+            self.dash_temp_label, self.dash_chg_voltage_label, self.dash_chg_current_label,
+        ):
+            widget.setStyleSheet(value_label_style(large=True))
+
+        delta_colors = {
+            'success': semantic_color('success', dark),
+            'warning': semantic_color('warning', dark),
+            'danger': semantic_color('danger', dark),
+        }
+        self.dash_delta_cell_label.setStyleSheet(
+            value_label_style(color=delta_colors.get(self._delta_tier))
+        )
+
+        self.dash_unseal_btn.setStyleSheet(action_button_style('#007bff'))
+        self.dash_seal_btn.setStyleSheet(action_button_style('#dc3545'))
+        self.dash_reset_btn.setStyleSheet(action_button_style('#6c757d'))
+        self.read_all_table_btn.setStyleSheet(action_button_style('#28a745'))
+
+        if hasattr(self, 'dash_health_alerts'):
+            self.dash_health_alerts.setStyleSheet(health_alert_style(self._health_worst, dark))
+
+        if hasattr(self, '_guide_step_labels'):
+            for label, accent in self._guide_step_labels:
+                label.setStyleSheet(step_card_style(dark, accent))
+        if hasattr(self, '_guide_pin_cards'):
+            for card in self._guide_pin_cards:
+                card.setStyleSheet(pin_card_style(dark))
 
     def _load_settings(self):
         geometry = self._settings.value('geometry')
@@ -241,13 +336,9 @@ class MainWindow(QMainWindow):
             lines.append(f'{icon} {message}')
             if rank.get(severity, 0) > rank.get(worst, 0):
                 worst = severity
-        styles = {
-            'info': 'padding: 10px; border-radius: 6px; background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460;',
-            'warning': 'padding: 10px; border-radius: 6px; background: #fff3cd; border: 1px solid #ffeeba; color: #856404;',
-            'critical': 'padding: 10px; border-radius: 6px; background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24;',
-        }
         self.dash_health_alerts.setText('Health assessment:\n' + '\n'.join(lines))
-        self.dash_health_alerts.setStyleSheet(styles.get(worst, styles['info']))
+        self._health_worst = worst
+        self.dash_health_alerts.setStyleSheet(health_alert_style(worst, self._dark_mode))
 
     def on_copy_snapshot(self):
         if not self._last_battery_snapshot:
@@ -293,14 +384,14 @@ class MainWindow(QMainWindow):
         return False
 
     def _build_top_header(self, layout):
-        header = QGroupBox('CP2112 Battery Analyzer — Adapter Control & Quick Commands')
-        header.setStyleSheet('QGroupBox { font-weight: bold; border: 1px solid #007bff; border-radius: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #007bff; }')
+        self.header_group = QGroupBox('CP2112 Battery Analyzer — Adapter Control & Quick Commands')
+        header = self.header_group
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(10, 8, 10, 8)
         header_layout.setSpacing(8)
 
         self.conn_status_badge = QLabel('🔴 Disconnected')
-        self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 5px 12px;')
+        self._style_conn_badge('danger')
         header_layout.addWidget(self.conn_status_badge)
 
         header_layout.addWidget(QLabel('Index:'))
@@ -326,22 +417,18 @@ class MainWindow(QMainWindow):
 
         # NLBA Main Action Buttons
         self.btn_read_info = QPushButton('⚡ READ BATTERY')
-        self.btn_read_info.setStyleSheet('font-weight: bold; padding: 7px 14px; background-color: #28a745; color: white; border-radius: 4px; font-size: 13px;')
         self.btn_read_info.clicked.connect(self.on_refresh_basic_values)
         header_layout.addWidget(self.btn_read_info)
 
         self.quick_unseal_btn = QPushButton('🔓 UNSEAL (DEFAULT KEYS)')
-        self.quick_unseal_btn.setStyleSheet('font-weight: bold; padding: 7px 14px; background-color: #007bff; color: white; border-radius: 4px; font-size: 13px;')
         self.quick_unseal_btn.clicked.connect(self.on_unseal_default_keys)
         header_layout.addWidget(self.quick_unseal_btn)
 
         self.quick_seal_btn = QPushButton('🔒 SEAL BATTERY')
-        self.quick_seal_btn.setStyleSheet('font-weight: bold; padding: 7px 14px; background-color: #dc3545; color: white; border-radius: 4px; font-size: 13px;')
         self.quick_seal_btn.clicked.connect(self.on_seal_battery)
         header_layout.addWidget(self.quick_seal_btn)
 
         self.auto_refresh_btn = QPushButton('▶️ AUTO-MONITOR (OFF)')
-        self.auto_refresh_btn.setStyleSheet('font-weight: bold; padding: 7px 12px; background-color: #6c757d; color: white; border-radius: 4px;')
         self.auto_refresh_btn.clicked.connect(self.on_toggle_auto_refresh)
         header_layout.addWidget(self.auto_refresh_btn)
 
@@ -356,7 +443,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(header)
 
         self.status_label = QLabel('Ready to connect battery')
-        self.status_label.setStyleSheet('font-style: italic; color: #444; padding-left: 4px;')
         layout.addWidget(self.status_label)
 
     def _build_dashboard_tab(self):
@@ -369,32 +455,28 @@ class MainWindow(QMainWindow):
         grid.setSpacing(10)
 
         # Card 1: SOC & State
-        soc_box = QGroupBox('🔋 State of Charge (SOC) & Health (SOH) — Live')
-        soc_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #28a745; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #28a745; }')
+        self.soc_box = QGroupBox('🔋 State of Charge (SOC) & Health (SOH) — Live')
+        soc_box = self.soc_box
         soc_layout = QVBoxLayout(soc_box)
         soc_layout.setContentsMargins(10, 10, 10, 10)
         soc_layout.setSpacing(6)
 
         self.dash_state_badge = QLabel('STATE: IDLE / STANDBY')
         self.dash_state_badge.setAlignment(QtCore.Qt.AlignCenter)
-        self.dash_state_badge.setStyleSheet('font-weight: bold; font-size: 13px; padding: 5px; background: #e9ecef; border-radius: 4px; color: #333;')
         soc_layout.addWidget(self.dash_state_badge)
 
         self.dash_soc_label = QLabel('0 %')
         self.dash_soc_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.dash_soc_label.setStyleSheet('font-size: 38px; font-weight: bold; color: #28a745;')
         soc_layout.addWidget(self.dash_soc_label)
 
         self.dash_soc_bar = QProgressBar()
         self.dash_soc_bar.setRange(0, 100)
         self.dash_soc_bar.setValue(0)
         self.dash_soc_bar.setTextVisible(True)
-        self.dash_soc_bar.setStyleSheet('QProgressBar { text-align: center; height: 22px; border-radius: 5px; } QProgressBar::chunk { background-color: #28a745; }')
         soc_layout.addWidget(self.dash_soc_bar)
 
         soh_form = QFormLayout()
         self.dash_soh_label = QLabel('-')
-        self.dash_soh_label.setStyleSheet('font-size: 14px; font-weight: bold; color: #28a745;')
         self.dash_max_error_label = QLabel('-')
         soh_form.addRow('Health (SOH %):', self.dash_soh_label)
         soh_form.addRow('Max Error:', self.dash_max_error_label)
@@ -402,31 +484,25 @@ class MainWindow(QMainWindow):
         self.dash_soh_bar.setRange(0, 100)
         self.dash_soh_bar.setValue(0)
         self.dash_soh_bar.setTextVisible(True)
-        self.dash_soh_bar.setStyleSheet('QProgressBar { text-align: center; height: 18px; border-radius: 5px; } QProgressBar::chunk { background-color: #17a2b8; }')
         soc_layout.addWidget(self.dash_soh_bar)
         soc_layout.addLayout(soh_form)
 
         self.dash_last_update_label = QLabel('Last update: —')
-        self.dash_last_update_label.setStyleSheet('font-size: 11px; color: #6c757d;')
         soc_layout.addWidget(self.dash_last_update_label)
 
         grid.addWidget(soc_box, 0, 0)
 
         # Card 2: Live Telemetry
-        vp_box = QGroupBox('⚡ Real-Time Telemetry')
-        vp_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #17a2b8; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #17a2b8; }')
+        self.vp_box = QGroupBox('⚡ Real-Time Telemetry')
+        vp_box = self.vp_box
         vp_layout = QFormLayout(vp_box)
         vp_layout.setContentsMargins(10, 10, 10, 10)
         vp_layout.setSpacing(6)
         self.dash_voltage_label = QLabel('-')
-        self.dash_voltage_label.setStyleSheet('font-size: 15px; font-weight: bold;')
         self.dash_current_label = QLabel('-')
-        self.dash_current_label.setStyleSheet('font-size: 15px; font-weight: bold;')
         self.dash_avg_current_label = QLabel('-')
         self.dash_power_label = QLabel('-')
-        self.dash_power_label.setStyleSheet('font-size: 15px; font-weight: bold;')
         self.dash_temp_label = QLabel('-')
-        self.dash_temp_label.setStyleSheet('font-size: 15px; font-weight: bold;')
 
         vp_layout.addRow('Pack Voltage:', self.dash_voltage_label)
         vp_layout.addRow('Actual Current:', self.dash_current_label)
@@ -436,8 +512,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(vp_box, 0, 1)
 
         # Card 3: Cell Voltages & Imbalance
-        cell_box = QGroupBox('🧪 Individual Cell Voltages & Imbalance')
-        cell_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #6f42c1; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #6f42c1; }')
+        self.cell_box = QGroupBox('🧪 Individual Cell Voltages & Imbalance')
+        cell_box = self.cell_box
         cell_layout = QFormLayout(cell_box)
         cell_layout.setContentsMargins(10, 10, 10, 10)
         cell_layout.setSpacing(6)
@@ -446,7 +522,6 @@ class MainWindow(QMainWindow):
         self.dash_cell3_label = QLabel('-')
         self.dash_cell4_label = QLabel('-')
         self.dash_delta_cell_label = QLabel('-')
-        self.dash_delta_cell_label.setStyleSheet('font-weight: bold; color: #28a745;')
 
         cell_layout.addRow('Cell 1:', self.dash_cell1_label)
         cell_layout.addRow('Cell 2:', self.dash_cell2_label)
@@ -456,8 +531,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(cell_box, 0, 2)
 
         # Card 4: Capacities & Runtime
-        cap_box = QGroupBox('📦 Capacity & Runtime')
-        cap_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #343a40; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #343a40; }')
+        self.cap_box = QGroupBox('📦 Capacity & Runtime')
+        cap_box = self.cap_box
         cap_layout = QFormLayout(cap_box)
         cap_layout.setContentsMargins(10, 10, 10, 10)
         cap_layout.setSpacing(6)
@@ -477,15 +552,13 @@ class MainWindow(QMainWindow):
         grid.addWidget(cap_box, 1, 0)
 
         # Card 5: BMS Charging Recommendations
-        chg_box = QGroupBox('🔌 BMS Charging Recommendations')
-        chg_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #fd7e14; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #fd7e14; }')
+        self.chg_box = QGroupBox('🔌 BMS Charging Recommendations')
+        chg_box = self.chg_box
         chg_layout = QFormLayout(chg_box)
         chg_layout.setContentsMargins(10, 10, 10, 10)
         chg_layout.setSpacing(6)
         self.dash_chg_voltage_label = QLabel('-')
-        self.dash_chg_voltage_label.setStyleSheet('font-weight: bold;')
         self.dash_chg_current_label = QLabel('-')
-        self.dash_chg_current_label.setStyleSheet('font-weight: bold;')
         self.dash_design_voltage_label = QLabel('-')
 
         chg_layout.addRow('Rec. Charging Voltage:', self.dash_chg_voltage_label)
@@ -494,8 +567,8 @@ class MainWindow(QMainWindow):
         grid.addWidget(chg_box, 1, 1)
 
         # Card 6: Chipset Info & Unseal Console
-        unseal_box = QGroupBox('🔓 Gas Gauge Identification & Security Console')
-        unseal_box.setStyleSheet('QGroupBox { font-weight: bold; border: 2px solid #007bff; border-radius: 6px; margin-top: 6px; padding-top: 10px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #007bff; }')
+        self.unseal_box = QGroupBox('🔓 Gas Gauge Identification & Security Console')
+        unseal_box = self.unseal_box
         unseal_layout = QVBoxLayout(unseal_box)
         unseal_layout.setContentsMargins(10, 10, 10, 10)
         unseal_layout.setSpacing(6)
@@ -521,15 +594,12 @@ class MainWindow(QMainWindow):
 
         btn_row = QHBoxLayout()
         self.dash_unseal_btn = QPushButton('🔓 UNSEAL')
-        self.dash_unseal_btn.setStyleSheet('font-weight: bold; padding: 7px; background-color: #007bff; color: white; border-radius: 4px;')
         self.dash_unseal_btn.clicked.connect(self.on_unseal_default_keys)
 
         self.dash_seal_btn = QPushButton('🔒 SEAL')
-        self.dash_seal_btn.setStyleSheet('font-weight: bold; padding: 7px; background-color: #dc3545; color: white; border-radius: 4px;')
         self.dash_seal_btn.clicked.connect(self.on_seal_battery)
 
         self.dash_reset_btn = QPushButton('🔄 RESET BMS')
-        self.dash_reset_btn.setStyleSheet('font-weight: bold; padding: 7px; background-color: #6c757d; color: white; border-radius: 4px;')
         self.dash_reset_btn.clicked.connect(self.on_reset_battery)
 
         btn_row.addWidget(self.dash_unseal_btn)
@@ -545,9 +615,7 @@ class MainWindow(QMainWindow):
 
         self.dash_health_alerts = QLabel('Health: connect battery and press READ BATTERY')
         self.dash_health_alerts.setWordWrap(True)
-        self.dash_health_alerts.setStyleSheet(
-            'padding: 10px; border-radius: 6px; background: #e9ecef; border: 1px solid #ced4da;'
-        )
+        self._health_worst = 'info'
         tab_layout.addLayout(grid)
         tab_layout.addWidget(self.dash_health_alerts)
         tab_layout.addStretch(1)
@@ -565,7 +633,6 @@ class MainWindow(QMainWindow):
         ctrl_layout.setContentsMargins(0, 0, 0, 0)
 
         self.read_all_table_btn = QPushButton('🔄 Read All SBS Registers')
-        self.read_all_table_btn.setStyleSheet('font-weight: bold; padding: 6px 12px; background-color: #28a745; color: white; border-radius: 4px;')
         self.read_all_table_btn.clicked.connect(self.on_read_all_registers_table)
 
         self.export_csv_btn = QPushButton('💾 Export Table to CSV')
@@ -736,53 +803,120 @@ class MainWindow(QMainWindow):
 
     def _build_pinout_guide_tab(self):
         tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(8, 8, 8, 8)
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(10)
 
-        guide_box = QGroupBox('📌 CP2112 Connection Guide & Battery Repair Cheat Sheet')
-        guide_layout = QVBoxLayout(guide_box)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setSpacing(12)
 
-        guide_text = QPlainTextEdit()
-        guide_text.setReadOnly(True)
-        guide_text.setPlainText(
-            "========================================================================\n"
-            "  CP2112 Battery Analyzer — Connection Guide & Repair Cheat Sheet\n"
-            "========================================================================\n\n"
-            "1. HARDWARE PINOUT — CP2112 Adapter to Laptop Battery:\n"
-            "   • CP2112 SDA (Data)   ──►  Battery SMBus Data  (SDA) Pin\n"
-            "   • CP2112 SCL (Clock)  ──►  Battery SMBus Clock (SCL) Pin\n"
-            "   • CP2112 GND (Ground) ──►  Battery Ground (GND / Negative) Pin\n\n"
-            "   NOTE: Use short wires (< 30 cm) and add 4.7 kΩ pull-up resistors on\n"
-            "         SDA and SCL if you get communication errors.\n\n"
-            "2. WAKING UP DORMANT / SLEEPING BATTERIES:\n"
-            "   • Many laptop batteries enter deep-sleep if disconnected for a long time.\n"
-            "     In this state the output pins carry no voltage and SMBus is unresponsive.\n"
-            "   • WAKE-UP METHOD: Briefly connect the 'System Present' pin (usually Pin 4,\n"
-            "     labelled SysPres, SMBC, or similar) to GND for ~2 seconds.\n"
-            "   • Alternatively, apply a short pulse of 5 V between B+ and B− for ~1 s.\n\n"
-            "3. COMMON SMBUS ADDRESSES & GAS GAUGE CHIPS:\n"
-            "   • Standard Laptop Battery Address : 0x0B  (7-bit) / 0x16 (8-bit write)\n"
-            "   • Texas Instruments BQ Series    : BQ20Z45, BQ20Z70, BQ20Z90, BQ30Z55,\n"
-            "                                      BQ40Z50, BQ40Z80\n"
-            "   • Maxim / Analog Devices          : MAX1781, MAX17055, DS2786\n"
-            "   • Renesas / Seiko                 : SN8030, R2J240, S-8530\n\n"
-            "4. UNSEAL KEY REFERENCE (write both Key1 then Key2 to ManufacturerAccess 0x00):\n"
-            "   • TI BQ20Zxx / BQ30xx (default) : Key1=0x0414  Key2=0x3672\n"
-            "   • TI BQ40xx / BQ2084            : Key1=0x3672  Key2=0x0414\n"
-            "   • Generic / Standard firmware   : Key1=0x8000  Key2=0x8000\n"
-            "   • Sony / Sanyo OEM firmware     : Key1=0x1122  Key2=0x3344\n"
-            "   • Full-access (if permitted)    : Key1=0xFFFF  Key2=0xFFFF\n\n"
-            "5. SEAL / LOCK COMMAND:\n"
-            "   • Write word 0x0020 to ManufacturerAccess (0x00) to re-seal the BMS.\n\n"
-            "6. TROUBLESHOOTING:\n"
-            "   • 'DEVICE_NOT_FOUND' error → Plug in the CP2112 USB dongle first.\n"
-            "   • 'Transfer timeout'       → Check SDA/SCL wiring; try pull-up resistors.\n"
-            "   • All registers return 0   → Battery may still be sleeping (see step 2).\n"
-            "   • Unseal has no effect     → Try the alternate TI key order (BQ40xx preset).\n"
+        self._guide_pin_cards = []
+        self._guide_step_labels = []
+
+        # Pinout diagram
+        pinout_group = QGroupBox('🔌 CP2112 to Battery Wiring')
+        pinout_layout = QVBoxLayout(pinout_group)
+
+        pin_row = QHBoxLayout()
+        adapter_card = QLabel(
+            '<b>CP2112 Adapter</b><br><br>'
+            '<span style="color:#007bff;">SDA</span> — Data<br>'
+            '<span style="color:#17a2b8;">SCL</span> — Clock<br>'
+            '<span style="color:#6c757d;">GND</span> — Ground'
         )
-        guide_layout.addWidget(guide_text)
+        adapter_card.setWordWrap(True)
+        battery_card = QLabel(
+            '<b>Laptop Battery</b><br><br>'
+            'SMBus Data (SDA)<br>'
+            'SMBus Clock (SCL)<br>'
+            'Ground (− / GND)'
+        )
+        battery_card.setWordWrap(True)
+        arrow_card = QLabel('──────────────►')
+        arrow_card.setAlignment(QtCore.Qt.AlignCenter)
+        for card in (adapter_card, arrow_card, battery_card):
+            card.setStyleSheet(pin_card_style(self._dark_mode))
+            self._guide_pin_cards.append(card)
+            pin_row.addWidget(card, stretch=1 if card is not arrow_card else 0)
+        pinout_layout.addLayout(pin_row)
 
-        layout.addWidget(guide_box)
+        tips = QLabel(
+            'Use short wires (&lt; 30 cm). Add 4.7 kΩ pull-ups on SDA and SCL if transfers time out. '
+            'Default SMBus address: <b>0x0B</b> (7-bit).'
+        )
+        tips.setWordWrap(True)
+        tips.setStyleSheet(muted_label_style(self._dark_mode))
+        pinout_layout.addWidget(tips)
+        layout.addWidget(pinout_group)
+
+        # Wake-up steps
+        wake_group = QGroupBox('💤 Wake Up Sleeping Batteries')
+        wake_layout = QVBoxLayout(wake_group)
+        wake_steps = [
+            ('1', 'blue', 'Deep-sleep batteries show 0 V on output pins and ignore SMBus.'),
+            ('2', 'teal', 'Connect the System Present pin (often pin 4 — SysPres / SMBC) to GND for ~2 seconds.'),
+            ('3', 'orange', 'Alternative: apply a brief 5 V pulse between B+ and B− for ~1 second.'),
+        ]
+        for number, accent, text in wake_steps:
+            step = QLabel(f'<b>Step {number}.</b> {text}')
+            step.setWordWrap(True)
+            step.setStyleSheet(step_card_style(self._dark_mode, accent))
+            self._guide_step_labels.append((step, accent))
+            wake_layout.addWidget(step)
+        layout.addWidget(wake_group)
+
+        # Unseal keys table
+        keys_group = QGroupBox('🔑 Unseal Key Reference')
+        keys_layout = QVBoxLayout(keys_group)
+        keys_table = QTableWidget()
+        keys_table.setColumnCount(3)
+        keys_table.setHorizontalHeaderLabels(['Gas Gauge / Firmware', 'Key 1', 'Key 2'])
+        keys_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        keys_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        keys_table.setAlternatingRowColors(True)
+        key_rows = [
+            ('TI BQ20Zxx / BQ30xx (default)', '0x0414', '0x3672'),
+            ('TI BQ40xx / BQ2084', '0x3672', '0x0414'),
+            ('Generic / Standard firmware', '0x8000', '0x8000'),
+            ('Sony / Sanyo OEM', '0x1122', '0x3344'),
+            ('Full access (if permitted)', '0xFFFF', '0xFFFF'),
+        ]
+        keys_table.setRowCount(len(key_rows))
+        for row, (name, k1, k2) in enumerate(key_rows):
+            keys_table.setItem(row, 0, QTableWidgetItem(name))
+            keys_table.setItem(row, 1, QTableWidgetItem(k1))
+            keys_table.setItem(row, 2, QTableWidgetItem(k2))
+        keys_table.setMaximumHeight(180)
+        keys_layout.addWidget(keys_table)
+        seal_note = QLabel('Re-seal: write word <b>0x0020</b> to ManufacturerAccess (0x00).')
+        seal_note.setWordWrap(True)
+        keys_layout.addWidget(seal_note)
+        layout.addWidget(keys_group)
+
+        # Troubleshooting
+        trouble_group = QGroupBox('🛠️ Troubleshooting')
+        trouble_layout = QVBoxLayout(trouble_group)
+        trouble_items = [
+            ('DEVICE_NOT_FOUND', 'Plug in the CP2112 USB dongle and install the Silicon Labs driver.'),
+            ('Transfer timeout', 'Check SDA/SCL wiring; add 4.7 kΩ pull-up resistors.'),
+            ('All registers return 0', 'Battery may still be sleeping — see wake-up steps above.'),
+            ('Unseal has no effect', 'Try the alternate TI key order (BQ40xx row in the table).'),
+        ]
+        for title, detail in trouble_items:
+            item = QLabel(f'<b>{title}</b> — {detail}')
+            item.setWordWrap(True)
+            item.setStyleSheet(step_card_style(self._dark_mode, 'neutral'))
+            self._guide_step_labels.append((item, 'neutral'))
+            trouble_layout.addWidget(item)
+        layout.addWidget(trouble_group)
+
+        layout.addStretch(1)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
         self.tab_widget.addTab(tab, '📌 Connection Guide')
 
     def _build_logs_tab(self):
@@ -823,15 +957,15 @@ class MainWindow(QMainWindow):
             self.device_index_input.setMaximum(max(count - 1, 0))
             if count > 0:
                 self.conn_status_badge.setText(f'🟢 {count} CP2112 Device(s) Found')
-                self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; padding: 5px 12px;')
+                self._style_conn_badge('success')
             else:
                 self.conn_status_badge.setText('🔴 Disconnected (0 Devices)')
-                self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 5px 12px;')
+                self._style_conn_badge('danger')
             self._set_status(f'Detected {count} CP2112 device(s)')
         except Exception as exc:
             self._append_log(f'Device detection failed: {exc}', error=True)
             self.conn_status_badge.setText('🔴 DLL / Driver Error')
-            self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 5px 12px;')
+            self._style_conn_badge('danger')
             self.device_index_input.setMaximum(0)
 
     def _update_device_info(self):
@@ -841,7 +975,7 @@ class MainWindow(QMainWindow):
             self.manufacturer_label.setText('-')
             self.path_label.setText('-')
             self.conn_status_badge.setText('🔴 Disconnected')
-            self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #721c24; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 5px 12px;')
+            self._style_conn_badge('danger')
             return
         info = self.device.get_info()
         strings = info.get('device_strings', {})
@@ -850,7 +984,7 @@ class MainWindow(QMainWindow):
         self.manufacturer_label.setText(strings.get('manufacturer', '-'))
         self.path_label.setText(strings.get('path', '-'))
         self.conn_status_badge.setText(f'🟢 Open ({strings.get("product", "CP2112")})')
-        self.conn_status_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; padding: 5px 12px;')
+        self._style_conn_badge('success')
         self._set_status('CP2112 device ready')
 
     def _get_report_text(self):
@@ -889,7 +1023,7 @@ class MainWindow(QMainWindow):
         if self.auto_refresh_timer.isActive():
             self.auto_refresh_timer.stop()
             self.auto_refresh_btn.setText('▶️ AUTO-MONITOR (OFF)')
-            self.auto_refresh_btn.setStyleSheet('font-weight: bold; padding: 7px 12px; background-color: #6c757d; color: white; border-radius: 4px;')
+            self._style_auto_refresh_btn(False)
             self._set_status('Live monitoring stopped')
         else:
             if not self._ensure_device_open():
@@ -897,7 +1031,7 @@ class MainWindow(QMainWindow):
             interval_ms = self.refresh_interval_spin.value() * 1000
             self.auto_refresh_timer.start(interval_ms)
             self.auto_refresh_btn.setText('⏹️ STOP MONITORING')
-            self.auto_refresh_btn.setStyleSheet('font-weight: bold; padding: 7px 12px; background-color: #dc3545; color: white; border-radius: 4px;')
+            self._style_auto_refresh_btn(True)
             self._set_status(f'Live monitoring active — polling every {self.refresh_interval_spin.value()} s')
 
     def _auto_refresh_tick(self):
@@ -907,7 +1041,7 @@ class MainWindow(QMainWindow):
             self._append_log(f'Auto-refresh tick error: {exc}', error=True)
             self.auto_refresh_timer.stop()
             self.auto_refresh_btn.setText('▶️ AUTO-MONITOR (OFF)')
-            self.auto_refresh_btn.setStyleSheet('font-weight: bold; padding: 7px 12px; background-color: #6c757d; color: white; border-radius: 4px;')
+            self._style_auto_refresh_btn(False)
 
     def on_open_device(self):
         try:
@@ -1119,14 +1253,15 @@ class MainWindow(QMainWindow):
             self.dash_soc_label.setText(f'{soc_val} %')
             self.dash_soc_bar.setValue(min(max(soc_val, 0), 100))
             if soc_val > 50:
-                self.dash_soc_bar.setStyleSheet('QProgressBar { text-align: center; height: 22px; border-radius: 5px; } QProgressBar::chunk { background-color: #28a745; }')
-                self.dash_soc_label.setStyleSheet('font-size: 38px; font-weight: bold; color: #28a745;')
+                self._soc_tier = 'success'
             elif soc_val >= 20:
-                self.dash_soc_bar.setStyleSheet('QProgressBar { text-align: center; height: 22px; border-radius: 5px; } QProgressBar::chunk { background-color: #ffc107; }')
-                self.dash_soc_label.setStyleSheet('font-size: 38px; font-weight: bold; color: #d39e00;')
+                self._soc_tier = 'warning'
             else:
-                self.dash_soc_bar.setStyleSheet('QProgressBar { text-align: center; height: 22px; border-radius: 5px; } QProgressBar::chunk { background-color: #dc3545; }')
-                self.dash_soc_label.setStyleSheet('font-size: 38px; font-weight: bold; color: #dc3545;')
+                self._soc_tier = 'danger'
+            self.dash_soc_label.setStyleSheet(soc_label_style(self._soc_tier, self._dark_mode))
+            self.dash_soc_bar.setStyleSheet(
+                progress_bar_style(semantic_color(self._soc_tier, self._dark_mode), self._dark_mode)
+            )
         else:
             self.dash_soc_label.setText('- %')
             self.dash_soc_bar.setValue(0)
@@ -1137,13 +1272,14 @@ class MainWindow(QMainWindow):
 
         if curr_val > 0:
             self.dash_state_badge.setText('⚡ CHARGING')
-            self.dash_state_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #155724; background: #d4edda; border-radius: 4px; padding: 5px;')
+            self._dash_state_kind = 'success'
         elif curr_val < 0:
             self.dash_state_badge.setText('🔋 DISCHARGING')
-            self.dash_state_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #856404; background: #fff3cd; border-radius: 4px; padding: 5px;')
+            self._dash_state_kind = 'warning'
         else:
             self.dash_state_badge.setText('💤 IDLE / STANDBY')
-            self.dash_state_badge.setStyleSheet('font-weight: bold; font-size: 13px; color: #383d41; background: #e2e3e5; border-radius: 4px; padding: 5px;')
+            self._dash_state_kind = 'idle'
+        self.dash_state_badge.setStyleSheet(badge_style_compact(self._dash_state_kind, self._dark_mode))
 
         power_w = abs(volt_val * curr_val) / 1000000.0
         self.dash_voltage_label.setText(formatted_data.get('Voltage', '-'))
@@ -1167,16 +1303,20 @@ class MainWindow(QMainWindow):
             delta_mv = max(cell_vals) - min(cell_vals)
             if delta_mv <= 30:
                 self.dash_delta_cell_label.setText(f'{delta_mv} mV (✅ EXCELLENT BALANCE)')
-                self.dash_delta_cell_label.setStyleSheet('font-weight: bold; color: #28a745;')
+                self._delta_tier = 'success'
             elif delta_mv <= 60:
                 self.dash_delta_cell_label.setText(f'{delta_mv} mV (⚠️ MODERATE)')
-                self.dash_delta_cell_label.setStyleSheet('font-weight: bold; color: #d39e00;')
+                self._delta_tier = 'warning'
             else:
                 self.dash_delta_cell_label.setText(f'{delta_mv} mV (🚨 HIGH IMBALANCE)')
-                self.dash_delta_cell_label.setStyleSheet('font-weight: bold; color: #dc3545;')
+                self._delta_tier = 'danger'
+            self.dash_delta_cell_label.setStyleSheet(
+                value_label_style(color=semantic_color(self._delta_tier, self._dark_mode))
+            )
         else:
             self.dash_delta_cell_label.setText('-')
-            self.dash_delta_cell_label.setStyleSheet('font-weight: bold;')
+            self._delta_tier = 'success'
+            self.dash_delta_cell_label.setStyleSheet(value_label_style())
 
         # Temperature & Capacities
         self.dash_temp_label.setText(formatted_data.get('Temperature', '-'))
@@ -1212,14 +1352,13 @@ class MainWindow(QMainWindow):
             soh_int = min(max(int(soh), 0), 100)
             self.dash_soh_bar.setValue(soh_int)
             if soh_int >= 70:
-                color = '#17a2b8'
+                self._soh_bar_color = semantic_color('info', self._dark_mode)
             elif soh_int >= 50:
-                color = '#ffc107'
+                self._soh_bar_color = semantic_color('warning', self._dark_mode)
             else:
-                color = '#dc3545'
+                self._soh_bar_color = semantic_color('danger', self._dark_mode)
             self.dash_soh_bar.setStyleSheet(
-                f'QProgressBar {{ text-align: center; height: 18px; border-radius: 5px; }} '
-                f'QProgressBar::chunk {{ background-color: {color}; }}'
+                progress_bar_style(self._soh_bar_color, self._dark_mode, height=18)
             )
         else:
             self.dash_soh_bar.setValue(0)

@@ -22,7 +22,7 @@ PYREADER_DIR = PYTHON_DIR / 'pyreader'
 APP_NAME = 'CP2112-Battery-Analyzer'
 SCRIPT = str(PYTHON_DIR / 'run_app.py')
 ICON_ICO = str(PYREADER_DIR / 'icon.ico')
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 
 REQUIRED_DLLS = ('SLABHIDtoSMBus.dll', 'SLABHIDDevice.dll')
 
