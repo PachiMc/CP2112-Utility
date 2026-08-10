@@ -1,28 +1,31 @@
-Proyecto migrado a Python con una GUI mejorada para interactuar con dispositivos CP2112.
+# CP2112 Python GUI
 
-Requisitos:
-- Colocar `SLABHIDtoSMBus.dll` en el PATH o en la misma carpeta que el ejecutable en Windows.
-- Instalar dependencias:
 
-```
+
+## Requirements
+
+* Install the required dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-Usar la versión de Python del sistema (recomendada >= 3.11). En Windows se puede usar el lanzador `py`:
+Use the system Python installation (Python >= 3.11 recommended). On Windows, the `py` launcher can be used:
 
-```
+```bash
 py -3 -m pip install -r requirements.txt
 ```
 
-Ejecutar GUI de ejemplo con el lanzador de Windows:
+Run the example GUI using the Windows Python launcher:
 
-```
+```bash
 py -3 -m pyreader
 ```
 
-Funcionalidades incluidas:
-- Detección de dispositivos CP2112 y apertura/cierre del dispositivo.
-- Lectura y escritura de transferencias SMBus con direcciones de esclavo y datos hexadecimales.
-- Lectura/escritura de latch y cancelación de transferencias/I/O.
-- Lectura de registros de batería tipo Smart Battery (dirección configurable, registros predefinidos, resumen de batería y exportación de reportes).
-- Registro visible en la GUI con exportación a archivo de texto para logs y reportes.
+## Features
+
+* Detection of CP2112 devices and device open/close operations.
+* Reading and writing SMBus transfers with configurable slave addresses and hexadecimal data.
+* Latch read/write operations and transfer/I/O cancellation.
+* Smart Battery-compatible register reading, including configurable device addresses, predefined registers, battery summaries, and report export.
+* Visible logging in the GUI with export to text files for logs and reports.
