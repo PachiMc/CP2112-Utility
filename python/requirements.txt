@@ -1,0 +1,4 @@
+
+# Use Qt6 bindings (PySide6) for newer Qt support
+PySide6>=6.5
+
