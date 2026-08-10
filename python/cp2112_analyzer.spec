@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 APP_NAME    = 'CP2112-Battery-Analyzer'
-SCRIPT      = str(Path('pyreader/__main__.py'))
+SCRIPT      = str(Path('run_app.py'))
 ICON_ICO    = str(Path('pyreader/icon.ico'))   # Windows / Linux
 ICON_PNG    = str(Path('pyreader/icon.png'))   # macOS fallback
 VERSION     = '1.0.0'
