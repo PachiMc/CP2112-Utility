@@ -1,13 +1,9 @@
-"""CP2112 Battery Analyzer — main GUI entry point.
-
-This module implements the full PySide6 desktop application for reading,
-diagnosing, and repairing laptop battery packs via the Silicon Laboratories
-CP2112 HID-to-SMBus bridge and the Smart Battery System (SBS v1.1) protocol.
-"""
+"""CP2112 Battery Analyzer — main GUI entry point."""
 import csv
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 from .paths import resource_path, user_data_dir
@@ -31,17 +27,16 @@ from .theme import (
 
 
 def _resource(filename: str) -> Path:
-    """Return the absolute path to a file bundled with this package."""
     return resource_path(filename)
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFormLayout,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
                                 QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                 QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit,
                                 QProgressBar, QPushButton, QSpinBox,
                                 QTableWidget, QTableWidgetItem, QTabWidget,
-                                QVBoxLayout, QWidget)
+                                QVBoxLayout, QWidget, QSizePolicy)
 
 try:
     from . import cp2112
@@ -83,17 +78,32 @@ def format_bytes(value):
     return sbs.format_bytes(value)
 
 
+# Presets ampliados para más marcas
 UNSEAL_PRESETS = {
     'TI BQ20Zxx / BQ30xx (0x0414, 0x3672)': (0x0414, 0x3672),
-    'Generic / Standard (0x8000, 0x8000)': (0x8000, 0x8000),
     'TI BQ40xx / BQ2084 (0x3672, 0x0414)': (0x3672, 0x0414),
+    'Generic / Standard (0x8000, 0x8000)': (0x8000, 0x8000),
     'Sony / Sanyo (0x1122, 0x3344)': (0x1122, 0x3344),
+    'Panasonic (0x0000, 0x0000)': (0x0000, 0x0000),  # a veces funciona
+    'Maxim / Dallas (0x0414, 0x0414)': (0x0414, 0x0414),
     'Full Unseal (0xFFFF, 0xFFFF)': (0xFFFF, 0xFFFF),
     'Zero Keys (0x0000, 0x0000)': (0x0000, 0x0000),
+    'HP / Dell OEM (0x2767, 0x2767)': (0x2767, 0x2767),  # algunas HP usan esto
+    'Custom Keys': (None, None),  # para entrada manual
+}
+
+# Presets de sellado (comandos ManufacturerAccess)
+SEAL_PRESETS = {
+    'Standard SBS (0x0020)': 0x0020,
+    'TI BQ20Zxx (0x0020)': 0x0020,
+    'TI BQ40xx (0x0030)': 0x0030,
+    'Maxim (0x0020)': 0x0020,
+    'HP OEM (0x0000)': 0x0000,  # algunas HP requieren 0x0000
+    'Custom': None,
 }
 
 APP_NAME = 'CP2112 Battery Analyzer'
-APP_VERSION = '1.2.0'
+APP_VERSION = '1.3.0'
 
 
 class MainWindow(QMainWindow):
@@ -114,15 +124,14 @@ class MainWindow(QMainWindow):
         self._soh_bar_color = '#17a2b8'
         self._delta_tier = 'success'
         self._health_worst = 'info'
+        self._locked_status = False
 
-        # Application icon (bundled icon.ico / icon.png)
         icon_path = _resource('icon.ico')
         if not icon_path.exists():
             icon_path = _resource('icon.png')
         if icon_path.exists():
             self.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
-        # Auto-refresh timer (Live Monitoring)
         self.auto_refresh_timer = QtCore.QTimer(self)
         self.auto_refresh_timer.timeout.connect(self._auto_refresh_tick)
 
@@ -167,7 +176,6 @@ class MainWindow(QMainWindow):
 
     def _build_menu_bar(self):
         menu_bar = self.menuBar()
-
         file_menu = menu_bar.addMenu('&File')
         file_menu.addAction('Export Battery Report…', self.on_export_battery_report)
         file_menu.addAction('Export Register CSV…', self.on_export_table_csv)
@@ -239,6 +247,7 @@ class MainWindow(QMainWindow):
         self.cap_box.setStyleSheet(group_box_style('neutral', dark))
         self.chg_box.setStyleSheet(group_box_style('orange', dark))
         self.unseal_box.setStyleSheet(group_box_style('blue', dark))
+        self.flags_box.setStyleSheet(group_box_style('blue', dark))
 
         self.btn_read_info.setStyleSheet(action_button_style('#28a745', large=True))
         self.quick_unseal_btn.setStyleSheet(action_button_style('#007bff', large=True))
@@ -271,6 +280,7 @@ class MainWindow(QMainWindow):
         self.dash_seal_btn.setStyleSheet(action_button_style('#dc3545'))
         self.dash_reset_btn.setStyleSheet(action_button_style('#6c757d'))
         self.read_all_table_btn.setStyleSheet(action_button_style('#28a745'))
+        self.clear_alarms_btn.setStyleSheet(action_button_style('#ffc107', large=True))
 
         if hasattr(self, 'dash_health_alerts'):
             self.dash_health_alerts.setStyleSheet(health_alert_style(self._health_worst, dark))
@@ -282,23 +292,49 @@ class MainWindow(QMainWindow):
             for card in self._guide_pin_cards:
                 card.setStyleSheet(pin_card_style(dark))
 
+        if hasattr(self, 'dash_lock_badge'):
+            lock_kind = 'danger' if self._locked_status else 'success'
+            self.dash_lock_badge.setStyleSheet(badge_style(lock_kind, dark))
+
     def _load_settings(self):
         geometry = self._settings.value('geometry')
         if geometry:
             self.restoreGeometry(geometry)
+
         address = self._settings.value('battery_address', '0x0B')
         if hasattr(self, 'battery_address_input'):
             self.battery_address_input.setText(str(address))
+
+        use_7bit = self._settings.value('battery_address_7bit', True, type=bool)
+        if hasattr(self, 'battery_address_checkbox_7bit'):
+            self.battery_address_checkbox_7bit.setChecked(use_7bit)
+            if address == '0x0B' and not self._settings.contains('battery_address_7bit'):
+                self._settings.setValue('battery_address_7bit', True)
+                self.battery_address_checkbox_7bit.setChecked(True)
+
         interval = self._settings.value('refresh_interval', 2, type=int)
         if hasattr(self, 'refresh_interval_spin'):
             self.refresh_interval_spin.setValue(max(1, min(60, interval)))
+
+        # Cargar presets de seal y unseal
+        seal_preset = self._settings.value('seal_preset', 'Standard SBS (0x0020)')
+        if hasattr(self, 'seal_preset_combo'):
+            idx = self.seal_preset_combo.findText(seal_preset)
+            if idx >= 0:
+                self.seal_preset_combo.setCurrentIndex(idx)
+            else:
+                self.seal_preset_combo.setCurrentIndex(0)
 
     def _save_settings(self):
         self._settings.setValue('geometry', self.saveGeometry())
         if hasattr(self, 'battery_address_input'):
             self._settings.setValue('battery_address', self.battery_address_input.text().strip())
+        if hasattr(self, 'battery_address_checkbox_7bit'):
+            self._settings.setValue('battery_address_7bit', self.battery_address_checkbox_7bit.isChecked())
         if hasattr(self, 'refresh_interval_spin'):
             self._settings.setValue('refresh_interval', self.refresh_interval_spin.value())
+        if hasattr(self, 'seal_preset_combo'):
+            self._settings.setValue('seal_preset', self.seal_preset_combo.currentText())
         self._settings.setValue('dark_mode', self._dark_mode)
 
     def closeEvent(self, event):
@@ -415,7 +451,6 @@ class MainWindow(QMainWindow):
 
         header_layout.addStretch(1)
 
-        # NLBA Main Action Buttons
         self.btn_read_info = QPushButton('⚡ READ BATTERY')
         self.btn_read_info.clicked.connect(self.on_refresh_basic_values)
         header_layout.addWidget(self.btn_read_info)
@@ -454,7 +489,7 @@ class MainWindow(QMainWindow):
         grid = QtWidgets.QGridLayout()
         grid.setSpacing(10)
 
-        # Card 1: SOC & State
+        # --- Card 1: SOC & SOH ---
         self.soc_box = QGroupBox('🔋 State of Charge (SOC) & Health (SOH) — Live')
         soc_box = self.soc_box
         soc_layout = QVBoxLayout(soc_box)
@@ -492,7 +527,7 @@ class MainWindow(QMainWindow):
 
         grid.addWidget(soc_box, 0, 0)
 
-        # Card 2: Live Telemetry
+        # --- Card 2: Telemetry ---
         self.vp_box = QGroupBox('⚡ Real-Time Telemetry')
         vp_box = self.vp_box
         vp_layout = QFormLayout(vp_box)
@@ -511,7 +546,7 @@ class MainWindow(QMainWindow):
         vp_layout.addRow('Cell Temp:', self.dash_temp_label)
         grid.addWidget(vp_box, 0, 1)
 
-        # Card 3: Cell Voltages & Imbalance
+        # --- Card 3: Celdas ---
         self.cell_box = QGroupBox('🧪 Individual Cell Voltages & Imbalance')
         cell_box = self.cell_box
         cell_layout = QFormLayout(cell_box)
@@ -530,7 +565,7 @@ class MainWindow(QMainWindow):
         cell_layout.addRow('Imbalance (Delta):', self.dash_delta_cell_label)
         grid.addWidget(cell_box, 0, 2)
 
-        # Card 4: Capacities & Runtime
+        # --- Card 4: Capacidades ---
         self.cap_box = QGroupBox('📦 Capacity & Runtime')
         cap_box = self.cap_box
         cap_layout = QFormLayout(cap_box)
@@ -551,7 +586,7 @@ class MainWindow(QMainWindow):
         cap_layout.addRow('Time to Full:', self.dash_time_full_label)
         grid.addWidget(cap_box, 1, 0)
 
-        # Card 5: BMS Charging Recommendations
+        # --- Card 5: Recomendaciones de carga ---
         self.chg_box = QGroupBox('🔌 BMS Charging Recommendations')
         chg_box = self.chg_box
         chg_layout = QFormLayout(chg_box)
@@ -566,7 +601,7 @@ class MainWindow(QMainWindow):
         chg_layout.addRow('Design Nominal Voltage:', self.dash_design_voltage_label)
         grid.addWidget(chg_box, 1, 1)
 
-        # Card 6: Chipset Info & Unseal Console
+        # --- Card 6: Identificación y seguridad ---
         self.unseal_box = QGroupBox('🔓 Gas Gauge Identification & Security Console')
         unseal_box = self.unseal_box
         unseal_layout = QVBoxLayout(unseal_box)
@@ -574,11 +609,23 @@ class MainWindow(QMainWindow):
         unseal_layout.setSpacing(6)
 
         info_f = QFormLayout()
+        # Aplicamos word wrap y ajuste de tamaño a los labels para evitar truncamiento
         self.dash_device_name_label = QLabel('-')
+        self.dash_device_name_label.setWordWrap(True)
+        self.dash_device_name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.dash_mfr_name_label = QLabel('-')
+        self.dash_mfr_name_label.setWordWrap(True)
+        self.dash_mfr_name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.dash_chem_label = QLabel('-')
+        self.dash_chem_label.setWordWrap(True)
+        self.dash_chem_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.dash_serial_label = QLabel('-')
+        self.dash_serial_label.setWordWrap(True)
+        self.dash_serial_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.dash_mfr_date_label = QLabel('-')
+        self.dash_mfr_date_label.setWordWrap(True)
+        self.dash_mfr_date_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
         info_f.addRow('Chipset / Device:', self.dash_device_name_label)
         info_f.addRow('Manufacturer:', self.dash_mfr_name_label)
         info_f.addRow('Cell Chemistry:', self.dash_chem_label)
@@ -612,6 +659,50 @@ class MainWindow(QMainWindow):
         unseal_layout.addWidget(self.dash_status_flags_label)
 
         grid.addWidget(unseal_box, 1, 2)
+
+        # --- Security & Flags section ---
+        self.flags_box = QGroupBox('🔐 Security & Flags')
+        flags_box = self.flags_box
+        flags_layout = QVBoxLayout(flags_box)
+        flags_layout.setContentsMargins(10, 10, 10, 10)
+        flags_layout.setSpacing(4)
+
+        lock_row = QHBoxLayout()
+        lock_row.addWidget(QLabel('BMS Security:'))
+        self.dash_lock_badge = QLabel('🔒 LOCKED')
+        self.dash_lock_badge.setStyleSheet(badge_style('danger', self._dark_mode))
+        lock_row.addWidget(self.dash_lock_badge)
+        lock_row.addStretch(1)
+        flags_layout.addLayout(lock_row)
+
+        self.dash_flags_detail = QLabel('Flags detail: —')
+        self.dash_flags_detail.setWordWrap(True)
+        self.dash_flags_detail.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.dash_flags_detail.setStyleSheet(muted_label_style(self._dark_mode))
+        flags_layout.addWidget(self.dash_flags_detail)
+
+        hex_row = QHBoxLayout()
+        self.dash_status_hex = QLabel('BatteryStatus: -')
+        self.dash_status_hex.setWordWrap(True)
+        self.dash_mode_hex = QLabel('BatteryMode: -')
+        self.dash_mode_hex.setWordWrap(True)
+        hex_row.addWidget(self.dash_status_hex)
+        hex_row.addWidget(self.dash_mode_hex)
+        hex_row.addStretch(1)
+        flags_layout.addLayout(hex_row)
+
+        clear_row = QHBoxLayout()
+        self.clear_alarms_btn = QPushButton('🧹 Clear Alarms / Reset Flags')
+        self.clear_alarms_btn.clicked.connect(self.on_clear_alarms)
+        self.clear_alarms_btn.setToolTip(
+            'Attempt to clear alarm flags (Overtemperature, Overcharge, etc.)\n'
+            'Battery must be UNSEALED for this to work.'
+        )
+        clear_row.addWidget(self.clear_alarms_btn)
+        clear_row.addStretch(1)
+        flags_layout.addLayout(clear_row)
+
+        grid.addWidget(flags_box, 2, 0, 1, 3)
 
         self.dash_health_alerts = QLabel('Health: connect battery and press READ BATTERY')
         self.dash_health_alerts.setWordWrap(True)
@@ -675,7 +766,22 @@ class MainWindow(QMainWindow):
         group_layout = QVBoxLayout(group)
         form_layout = QFormLayout()
 
+        # --- Dirección y checkbox 7-bit ---
+        addr_widget = QWidget()
+        addr_layout = QHBoxLayout(addr_widget)
+        addr_layout.setContentsMargins(0, 0, 0, 0)
         self.battery_address_input = QLineEdit('0x0B')
+        self.battery_address_checkbox_7bit = QCheckBox("7-bit address (SBS standard)")
+        self.battery_address_checkbox_7bit.setChecked(True)
+        self.battery_address_checkbox_7bit.setToolTip(
+            "If enabled, the entered address is treated as 7-bit and will be shifted left (multiplied by 2) "
+            "for the CP2112 DLL (which expects 8-bit). Disable if you are entering an 8-bit address directly."
+        )
+        addr_layout.addWidget(self.battery_address_input)
+        addr_layout.addWidget(self.battery_address_checkbox_7bit)
+        form_layout.addRow('Battery I2C Address:', addr_widget)
+
+        # --- Registro y lectura ---
         self.battery_register_combo = QComboBox()
         self.battery_register_combo.setEditable(True)
         self.battery_register_combo.addItems(list(self.BATTERY_REGISTERS.keys()))
@@ -689,12 +795,6 @@ class MainWindow(QMainWindow):
         self.battery_export_button = QPushButton('Export Report (.txt)')
         self.battery_export_button.clicked.connect(self.on_export_battery_report)
 
-        self.battery_unseal_key1_input = QLineEdit('0x0414')
-        self.battery_unseal_key2_input = QLineEdit('0x3672')
-        self.battery_unseal_button = QPushButton('Custom Manual Unseal')
-        self.battery_unseal_button.clicked.connect(self.on_unseal_battery)
-
-        form_layout.addRow('Battery I2C Address:', self.battery_address_input)
         form_layout.addRow('SMBus Register:', self.battery_register_combo)
         form_layout.addRow('Read Length:', self.battery_read_length_input)
 
@@ -706,10 +806,40 @@ class MainWindow(QMainWindow):
         r1_lay.addWidget(self.battery_export_button)
         form_layout.addRow(row1)
 
+        # --- Comandos ManufacturerAccess personalizados ---
+        form_layout.addRow(QLabel('--- Custom Manufacturer Commands ---'))
+        self.manufacturer_command_input = QLineEdit('0x0022')
+        form_layout.addRow('Command (hex):', self.manufacturer_command_input)
+        self.send_manufacturer_cmd_btn = QPushButton('Send Manufacturer Command')
+        self.send_manufacturer_cmd_btn.clicked.connect(self.on_send_manufacturer_command)
+        form_layout.addRow(self.send_manufacturer_cmd_btn)
+
+        # --- Unseal manual ---
+        self.battery_unseal_key1_input = QLineEdit('0x0414')
+        self.battery_unseal_key2_input = QLineEdit('0x3672')
+        self.battery_unseal_button = QPushButton('Custom Manual Unseal')
+        self.battery_unseal_button.clicked.connect(self.on_unseal_battery)
+
         form_layout.addRow('Unseal Key 1 (Hex):', self.battery_unseal_key1_input)
         form_layout.addRow('Unseal Key 2 (Hex):', self.battery_unseal_key2_input)
         form_layout.addRow(self.battery_unseal_button)
 
+        # --- Seal personalizado ---
+        form_layout.addRow(QLabel('--- Seal Command ---'))
+        self.seal_preset_combo = QComboBox()
+        self.seal_preset_combo.addItems(list(SEAL_PRESETS.keys()))
+        self.seal_preset_combo.currentIndexChanged.connect(self.on_seal_preset_changed)
+        form_layout.addRow('Seal Preset:', self.seal_preset_combo)
+
+        self.custom_seal_command = QLineEdit('0x0020')
+        self.custom_seal_command.setEnabled(False)  # se habilita cuando se selecciona 'Custom'
+        form_layout.addRow('Custom Seal Command:', self.custom_seal_command)
+
+        self.seal_custom_button = QPushButton('Send Custom Seal Command')
+        self.seal_custom_button.clicked.connect(self.on_send_custom_seal)
+        form_layout.addRow(self.seal_custom_button)
+
+        # --- Último valor leído ---
         self.battery_last_value_label = QLabel('-')
         form_layout.addRow('Last Read Value:', self.battery_last_value_label)
 
@@ -817,7 +947,6 @@ class MainWindow(QMainWindow):
         self._guide_pin_cards = []
         self._guide_step_labels = []
 
-        # Pinout diagram
         pinout_group = QGroupBox('🔌 CP2112 to Battery Wiring')
         pinout_layout = QVBoxLayout(pinout_group)
 
@@ -844,16 +973,16 @@ class MainWindow(QMainWindow):
             pin_row.addWidget(card, stretch=1 if card is not arrow_card else 0)
         pinout_layout.addLayout(pin_row)
 
-        tips = QLabel(
+        addr_note = QLabel(
             'Use short wires (&lt; 30 cm). Add 4.7 kΩ pull-ups on SDA and SCL if transfers time out. '
-            'Default SMBus address: <b>0x0B</b> (7-bit).'
+            'Default SMBus address: <b>0x0B</b> (7-bit). '
+            '<span style="color:#17a2b8;">The software converts 7-bit addresses to 8-bit internally.</span>'
         )
-        tips.setWordWrap(True)
-        tips.setStyleSheet(muted_label_style(self._dark_mode))
-        pinout_layout.addWidget(tips)
+        addr_note.setWordWrap(True)
+        addr_note.setStyleSheet(muted_label_style(self._dark_mode))
+        pinout_layout.addWidget(addr_note)
         layout.addWidget(pinout_group)
 
-        # Wake-up steps
         wake_group = QGroupBox('💤 Wake Up Sleeping Batteries')
         wake_layout = QVBoxLayout(wake_group)
         wake_steps = [
@@ -869,7 +998,6 @@ class MainWindow(QMainWindow):
             wake_layout.addWidget(step)
         layout.addWidget(wake_group)
 
-        # Unseal keys table
         keys_group = QGroupBox('🔑 Unseal Key Reference')
         keys_layout = QVBoxLayout(keys_group)
         keys_table = QTableWidget()
@@ -884,6 +1012,7 @@ class MainWindow(QMainWindow):
             ('Generic / Standard firmware', '0x8000', '0x8000'),
             ('Sony / Sanyo OEM', '0x1122', '0x3344'),
             ('Full access (if permitted)', '0xFFFF', '0xFFFF'),
+            ('HP / Dell OEM (0x2767, 0x2767)', '0x2767', '0x2767'),
         ]
         keys_table.setRowCount(len(key_rows))
         for row, (name, k1, k2) in enumerate(key_rows):
@@ -892,19 +1021,20 @@ class MainWindow(QMainWindow):
             keys_table.setItem(row, 2, QTableWidgetItem(k2))
         keys_table.setMaximumHeight(180)
         keys_layout.addWidget(keys_table)
-        seal_note = QLabel('Re-seal: write word <b>0x0020</b> to ManufacturerAccess (0x00).')
+        seal_note = QLabel('Re-seal: write word <b>0x0020</b> to ManufacturerAccess (0x00). '
+                           'Some batteries may use 0x0030 or 0x0000. You can customize the seal command in the Advanced Battery tab.')
         seal_note.setWordWrap(True)
         keys_layout.addWidget(seal_note)
         layout.addWidget(keys_group)
 
-        # Troubleshooting
         trouble_group = QGroupBox('🛠️ Troubleshooting')
         trouble_layout = QVBoxLayout(trouble_group)
         trouble_items = [
             ('DEVICE_NOT_FOUND', 'Plug in the CP2112 USB dongle and install the Silicon Labs driver.'),
             ('Transfer timeout', 'Check SDA/SCL wiring; add 4.7 kΩ pull-up resistors.'),
             ('All registers return 0', 'Battery may still be sleeping — see wake-up steps above.'),
-            ('Unseal has no effect', 'Try the alternate TI key order (BQ40xx row in the table).'),
+            ('Unseal has no effect', 'Try the alternate TI key order (BQ40xx row in the table) or HP/Dell keys.'),
+            ('Cannot seal battery', 'Some chips do not support sealing, or require a custom command. Use the Advanced Battery tab to send custom seal commands.'),
         ]
         for title, detail in trouble_items:
             item = QLabel(f'<b>{title}</b> — {detail}')
@@ -998,7 +1128,20 @@ class MainWindow(QMainWindow):
         return path
 
     def _resolve_battery_address(self):
-        return parse_int(self.battery_address_input.text(), default=0x0B)
+        addr_str = self.battery_address_input.text().strip()
+        try:
+            addr = int(addr_str, 0)
+        except ValueError:
+            raise ValueError(f'Invalid address: {addr_str}')
+
+        if self.battery_address_checkbox_7bit.isChecked():
+            if addr < 0x80:
+                return addr << 1
+            else:
+                logger.warning(f"Address {addr:#x} > 0x7F but 7-bit checkbox is checked; using as 8-bit.")
+                return addr
+        else:
+            return addr
 
     def _resolve_battery_register(self):
         selected = self.battery_register_combo.currentText().strip()
@@ -1012,13 +1155,148 @@ class MainWindow(QMainWindow):
     def _format_battery_value(self, register_name, data):
         return sbs.format_register_value(register_name, data)
 
+    # --- Presets de unseal ---
     def on_preset_changed(self):
         preset_name = self.preset_combo.currentText()
-        if preset_name in UNSEAL_PRESETS:
+        if preset_name == 'Custom Keys':
+            # Dejar los campos vacíos para entrada manual
+            self.battery_unseal_key1_input.setText('')
+            self.battery_unseal_key2_input.setText('')
+        elif preset_name in UNSEAL_PRESETS:
             k1, k2 = UNSEAL_PRESETS[preset_name]
-            self.battery_unseal_key1_input.setText(f'0x{k1:04X}')
-            self.battery_unseal_key2_input.setText(f'0x{k2:04X}')
+            if k1 is not None and k2 is not None:
+                self.battery_unseal_key1_input.setText(f'0x{k1:04X}')
+                self.battery_unseal_key2_input.setText(f'0x{k2:04X}')
 
+    # --- Presets de seal ---
+    def on_seal_preset_changed(self, index):
+        preset_name = self.seal_preset_combo.currentText()
+        if preset_name == 'Custom':
+            self.custom_seal_command.setEnabled(True)
+            self.custom_seal_command.setText('0x0020')  # valor por defecto
+        else:
+            self.custom_seal_command.setEnabled(False)
+            if preset_name in SEAL_PRESETS and SEAL_PRESETS[preset_name] is not None:
+                self.custom_seal_command.setText(f'0x{SEAL_PRESETS[preset_name]:04X}')
+            else:
+                self.custom_seal_command.setText('0x0020')
+
+    # --- Envío de comando ManufacturerAccess ---
+    def on_send_manufacturer_command(self):
+        try:
+            if not self._ensure_device_open():
+                return
+            address = self._resolve_battery_address()
+            cmd_str = self.manufacturer_command_input.text().strip()
+            try:
+                cmd = int(cmd_str, 0)
+            except ValueError:
+                QMessageBox.warning(self, 'Invalid Command', f'Invalid command: {cmd_str}')
+                return
+
+            self.device.write_register(address, 0x00, cmd.to_bytes(2, 'little'))
+            self._set_status(f'Manufacturer command 0x{cmd:04X} sent')
+            self._append_log(f'Manufacturer command 0x{cmd:04X} sent to 0x{address:02X}')
+            time.sleep(0.2)
+            self._refresh_basic_values()
+            QMessageBox.information(
+                self,
+                'Command Sent',
+                f'Manufacturer command 0x{cmd:04X} sent to battery at 0x{address:02X}.'
+            )
+        except Exception as exc:
+            self._append_log(f'Manufacturer command failed: {exc}', error=True)
+            QMessageBox.warning(self, 'Command Failed', f'Error sending command:\n{exc}')
+
+    # --- Envío de comando de seal personalizado ---
+    def on_send_custom_seal(self):
+        try:
+            if not self._ensure_device_open():
+                return
+            address = self._resolve_battery_address()
+            cmd_str = self.custom_seal_command.text().strip()
+            try:
+                cmd = int(cmd_str, 0)
+            except ValueError:
+                QMessageBox.warning(self, 'Invalid Command', f'Invalid seal command: {cmd_str}')
+                return
+
+            self.device.write_register(address, 0x00, cmd.to_bytes(2, 'little'))
+            self._set_status(f'Custom seal command 0x{cmd:04X} sent')
+            self._append_log(f'Custom seal command 0x{cmd:04X} sent to 0x{address:02X}')
+            time.sleep(0.2)
+            self._refresh_basic_values()
+            QMessageBox.information(
+                self,
+                'Seal Command Sent',
+                f'Custom seal command 0x{cmd:04X} sent to battery at 0x{address:02X}.'
+            )
+        except Exception as exc:
+            self._append_log(f'Custom seal command failed: {exc}', error=True)
+            QMessageBox.warning(self, 'Command Failed', f'Error sending seal command:\n{exc}')
+
+    # --- Limpiar alarmas (mejorado con sugerencias) ---
+    def on_clear_alarms(self):
+        try:
+            if not self._ensure_device_open():
+                return
+            if not self._confirm_action(
+                'Clear Alarms / Reset Flags',
+                'This will attempt to clear battery alarm flags (Overtemperature, Overcharge, etc.)\n\n'
+                'Common commands will be tried: 0x0022 (TI), 0x0012 (some), and writing 0 to BatteryStatus.\n'
+                'The battery should be UNSEALED for this to work.\n'
+                'Proceed?'
+            ):
+                return
+
+            address = self._resolve_battery_address()
+            commands = [0x0022, 0x0012, 0x0000]
+            success = False
+            last_error = None
+
+            for cmd in commands:
+                try:
+                    if cmd != 0x0000:
+                        self.device.write_register(address, 0x00, cmd.to_bytes(2, 'little'))
+                        time.sleep(0.05)
+                    self.device.write_register(address, 0x16, (0x0000).to_bytes(2, 'little'))
+                    success = True
+                    self._append_log(f'Clear alarms command 0x{cmd:04X} + BatteryStatus=0 sent')
+                    break
+                except Exception as e:
+                    last_error = e
+                    self._append_log(f'Command 0x{cmd:04X} failed: {e}', error=True)
+                    continue
+
+            if success:
+                self._set_status('Clear alarms commands sent (tried multiple)')
+                time.sleep(0.3)
+                self._refresh_basic_values()
+                QMessageBox.information(
+                    self,
+                    'Clear Alarms',
+                    'Alarm clear commands were sent.\n\n'
+                    'If flags persist, use the "Send Manufacturer Command" field in the Advanced Battery tab '
+                    'to try other commands specific to your gas gauge (e.g., 0x0022, 0x0012, 0x0000, etc.).\n\n'
+                    'Consult the battery/gauge datasheet for the correct command.'
+                )
+            else:
+                raise Exception(f'All commands failed. Last error: {last_error}')
+
+        except Exception as exc:
+            self._append_log(f'Clear alarms failed: {exc}', error=True)
+            QMessageBox.warning(
+                self,
+                'Clear Alarms Failed',
+                f'Failed to clear alarms.\n\nError: {exc}\n\n'
+                'Suggestions:\n'
+                '1. Use the "Send Manufacturer Command" field with commands specific to your battery.\n'
+                '2. Common commands to try: 0x0022 (TI), 0x0012 (some), 0x0000 (reset flags), 0x0041 (reset).\n'
+                '3. Consult the datasheet of your gas gauge for the correct clear-alarm command.\n'
+                '4. Some batteries do not support clearing flags via this method.'
+            )
+
+    # --- Resto de funciones (on_open_device, on_close_device, etc.) ---
     def on_toggle_auto_refresh(self):
         if self.auto_refresh_timer.isActive():
             self.auto_refresh_timer.stop()
@@ -1053,8 +1331,6 @@ class MainWindow(QMainWindow):
                     self.device = None
 
                 if already_open:
-                    # Device is already open — just refresh the badge so it
-                    # always shows the correct name/state after repeated clicks.
                     self._update_device_info()
                     self._set_status('Device already open — connection info refreshed')
                     return
@@ -1226,6 +1502,54 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._append_log(f'Read battery register failed: {exc}', error=True)
 
+    def _interpret_battery_flags(self, status_word, mode_word):
+        flags = []
+        if status_word is not None:
+            if status_word & 0x0001:
+                flags.append("🔋 Overcharge alarm")
+            if status_word & 0x0002:
+                flags.append("⚡ Terminate discharge alarm")
+            if status_word & 0x0004:
+                flags.append("🔌 Overcurrent alarm")
+            if status_word & 0x0008:
+                flags.append("🌡️ Overvoltage alarm")
+            if status_word & 0x0010:
+                flags.append("❄️ Under voltage alarm")
+            if status_word & 0x0020:
+                flags.append("🔥 Over temperature alarm")
+            if status_word & 0x0040:
+                flags.append("⚡ Terminate charge alarm")
+            if status_word & 0x0080:
+                flags.append("⚠️ Battery critical alarm")
+            if status_word & 0x0100:
+                flags.append("🔋 Battery present")
+            if status_word & 0x0200:
+                flags.append("🔄 Cycle count available")
+            if status_word & 0x0400:
+                flags.append("⚖️ Capacity mode (mAh/mWh)")
+            if status_word & 0x0800:
+                flags.append("🔄 AC present (external power)")
+            if status_word & 0x2000:
+                flags.append("🔒 SEALED (locked)")
+            else:
+                flags.append("🔓 UNSEALED (unlocked)")
+            if status_word & 0x4000:
+                flags.append("🧪 PF Alert (Permanent Failure)")
+            if status_word & 0x8000:
+                flags.append("⚠️ Reserved / Error flag")
+        if mode_word is not None:
+            if mode_word & 0x0001:
+                flags.append("📊 Internal charger enabled")
+            if mode_word & 0x0002:
+                flags.append("🔋 Primary battery")
+            if mode_word & 0x0004:
+                flags.append("⚡ Alarm mode enabled")
+            if mode_word & 0x0008:
+                flags.append("🔌 Charger current enabled")
+            if mode_word & 0x0010:
+                flags.append("🌡️ Temperature sensing enabled")
+        return flags
+
     def _refresh_basic_values(self):
         if not self._ensure_device_open():
             raise RuntimeError('No open device')
@@ -1235,6 +1559,7 @@ class MainWindow(QMainWindow):
 
         raw_data = {}
         formatted_data = {}
+        failed_regs = []
 
         for reg_name in regs_to_read:
             try:
@@ -1243,8 +1568,52 @@ class MainWindow(QMainWindow):
                 data = self.device.read_register(address, reg_addr, length=length)
                 raw_data[reg_name] = data
                 formatted_data[reg_name] = self._format_battery_value(reg_name, data)
-            except Exception:
+            except Exception as e:
                 formatted_data[reg_name] = 'N/A'
+                failed_regs.append(reg_name)
+                logger.error(f"Error reading {reg_name}: {e}")
+
+        total = len(regs_to_read)
+        ok = total - len(failed_regs)
+        if failed_regs:
+            self._append_log(f"Dashboard read: {ok}/{total} registers OK, failed: {', '.join(failed_regs)}", error=True)
+        else:
+            self._append_log(f"Dashboard read: all {total} registers OK")
+
+        status_raw = raw_data.get('BatteryStatus')
+        mode_raw = raw_data.get('BatteryMode')
+        status_word = None
+        mode_word = None
+        if status_raw and len(status_raw) >= 2:
+            status_word = int.from_bytes(status_raw[:2], 'little', signed=False)
+        if mode_raw and len(mode_raw) >= 2:
+            mode_word = int.from_bytes(mode_raw[:2], 'little', signed=False)
+
+        if status_word is not None:
+            self._locked_status = bool(status_word & 0x2000)
+        else:
+            self._locked_status = False
+
+        lock_kind = 'danger' if self._locked_status else 'success'
+        lock_text = '🔒 LOCKED' if self._locked_status else '🔓 UNLOCKED'
+        self.dash_lock_badge.setText(lock_text)
+        self.dash_lock_badge.setStyleSheet(badge_style(lock_kind, self._dark_mode))
+
+        flags_list = self._interpret_battery_flags(status_word, mode_word)
+        if flags_list:
+            flags_text = ' | '.join(flags_list)
+        else:
+            flags_text = 'No flags active or unable to read status.'
+        self.dash_flags_detail.setText(f'Flags detail: {flags_text}')
+
+        if status_word is not None:
+            self.dash_status_hex.setText(f'BatteryStatus: 0x{status_word:04X}')
+        else:
+            self.dash_status_hex.setText('BatteryStatus: -')
+        if mode_word is not None:
+            self.dash_mode_hex.setText(f'BatteryMode: 0x{mode_word:04X}')
+        else:
+            self.dash_mode_hex.setText('BatteryMode: -')
 
         # SOC
         soc_raw = raw_data.get('RelativeStateOfCharge')
@@ -1377,7 +1746,7 @@ class MainWindow(QMainWindow):
 
     def on_refresh_basic_values(self):
         try:
-            values = self._refresh_basic_values()
+            self._refresh_basic_values()
             self._set_status('Battery data read successfully')
             self._append_log('Battery read OK')
         except Exception as exc:
@@ -1443,6 +1812,8 @@ class MainWindow(QMainWindow):
             self.device.unseal(address, key1=key1, key2=key2)
             self._set_status('Unseal sequence sent')
             self._append_log(f'Unseal sequence sent with keys 0x{key1:04X}, 0x{key2:04X}')
+            time.sleep(0.2)
+            self._refresh_basic_values()
             QMessageBox.information(
                 self,
                 'Unseal Sent',
@@ -1465,10 +1836,15 @@ class MainWindow(QMainWindow):
             address = self._resolve_battery_address()
             preset_name = self.preset_combo.currentText()
             key1, key2 = UNSEAL_PRESETS.get(preset_name, (0x0414, 0x3672))
+            if key1 is None or key2 is None:
+                QMessageBox.warning(self, 'Invalid Preset', 'Selected preset has no valid keys. Please enter keys manually.')
+                return
 
             self.device.unseal(address, key1=key1, key2=key2)
             self._set_status(f'Unseal sequence sent — preset: {preset_name}')
             self._append_log(f'Default Unseal executed: key1=0x{key1:04X}, key2=0x{key2:04X}')
+            time.sleep(0.2)
+            self._refresh_basic_values()
             QMessageBox.information(
                 self,
                 'Unseal with Default Keys',
@@ -1480,16 +1856,31 @@ class MainWindow(QMainWindow):
             self._append_log(f'Default Unseal failed: {exc}', error=True)
 
     def on_seal_battery(self):
+        # Este método usa el comando de seal por defecto (0x0020) para el botón rápido
+        # pero también se puede usar el personalizado desde la pestaña avanzada.
         try:
             if not self._ensure_device_open():
                 return
-            if not self._confirm_action('Seal Battery', 'Re-seal (lock) the battery BMS?'):
+            if not self._confirm_action('Seal Battery', 'Re-seal (lock) the battery BMS using standard command (0x0020)?'):
                 return
             address = self._resolve_battery_address()
             self.device.seal(address)
-            self._set_status('SEAL command sent to battery BMS')
-            self._append_log('SEAL command sent to battery BMS')
-            QMessageBox.information(self, 'SEAL Battery', f'Security lock command (SEAL) sent to battery at 0x{address:02X}.')
+            self._set_status('SEAL command (0x0020) sent to battery BMS')
+            self._append_log('SEAL command (0x0020) sent to battery BMS')
+            time.sleep(0.2)
+            self._refresh_basic_values()
+            if not self._locked_status:
+                QMessageBox.information(
+                    self,
+                    'SEAL Battery',
+                    f'SEAL command (0x0020) sent to battery at 0x{address:02X}.\n\n'
+                    'However, the battery still reports as UNLOCKED. '
+                    'This may happen if the battery does not support this command '
+                    'or requires a different sequence.\n\n'
+                    'Try using the custom seal command in the Advanced Battery tab.'
+                )
+            else:
+                QMessageBox.information(self, 'SEAL Battery', f'Battery successfully SEALED (locked) at 0x{address:02X}.')
         except Exception as exc:
             self._append_log(f'SEAL command failed: {exc}', error=True)
 
@@ -1564,7 +1955,6 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    """Entry point for the CP2112 Battery Analyzer standalone application."""
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     app.setApplicationName(APP_NAME)

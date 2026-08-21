@@ -126,17 +126,17 @@ if _dll is not None:
     except AttributeError:
         pass
 
-# Default values
+# Default values - bitrate reducido y retries aumentados
 VID = 0x10C4
 PID = 0xEA90
-BITRATE_HZ = 70000
+BITRATE_HZ = 25000
 ACK_ADDRESS = 0x02
 WRITE_TIMEOUT_MS = 1000
 READ_TIMEOUT_MS = 1000
-TRANSFER_RETRIES = 0
+TRANSFER_RETRIES = 3
 SCL_LOW_TIMEOUT = True
 RESPONSE_TIMEOUT_MS = 1000
-DEFAULT_SMART_BATTERY_UNSEAL_KEYS = (0x0414, 0x3672)  # TI BQ default unseal keys (key1=0x0414, key2=0x3672)
+DEFAULT_SMART_BATTERY_UNSEAL_KEYS = (0x0414, 0x3672)
 
 # Status values
 HID_SMBUS_SUCCESS = 0x00
@@ -482,6 +482,20 @@ def write_request(device, slave_address, data):
     return True
 
 
+def wait_for_transfer(device, timeout_ms=2000, poll_interval_ms=50):
+    _check_dll()
+    _check_device(device)
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        transfer_status_request(device)
+        status = get_transfer_status_response(device)
+        logger.debug(f"Transfer status: {status}")
+        if status['status'] in (HID_SMBUS_S0_COMPLETE, HID_SMBUS_S0_ERROR):
+            return status
+        time.sleep(poll_interval_ms / 1000.0)
+    raise CP2112Error('Timeout waiting for SMBus transfer completion')
+
+
 def write_register(device, slave_address, register_address, data):
     _check_dll()
     _check_device(device)
@@ -500,6 +514,15 @@ def write_register(device, slave_address, register_address, data):
     status = _dll.HidSmbus_WriteRequest(device, BYTE(slave_address), _build_byte_buffer(payload), BYTE(len(payload)))
     if status != HID_SMBUS_SUCCESS:
         raise CP2112Error(f'HidSmbus_WriteRequest failed: {status} ({status_str(status)})')
+    # Esperar y obtener estado de transferencia
+    transfer_status = wait_for_transfer(device)
+    if transfer_status['status'] == HID_SMBUS_S0_ERROR:
+        raise CP2112Error(
+            f'Register write failed: status0={transfer_status["status"]}, '
+            f'detailed_status={transfer_status["detailed_status"]}, '
+            f'num_retries={transfer_status["num_retries"]}, '
+            f'bytes_read={transfer_status["bytes_read"]}'
+        )
     return True
 
 
@@ -677,19 +700,6 @@ def open_first_device():
     return open_device(0)
 
 
-def wait_for_transfer(device, timeout_ms=2000, poll_interval_ms=50):
-    _check_dll()
-    _check_device(device)
-    deadline = time.monotonic() + timeout_ms / 1000.0
-    while time.monotonic() < deadline:
-        transfer_status_request(device)
-        status = get_transfer_status_response(device)
-        if status['status'] in (HID_SMBUS_S0_COMPLETE, HID_SMBUS_S0_ERROR):
-            return status
-        time.sleep(poll_interval_ms / 1000.0)
-    raise CP2112Error('Timeout waiting for SMBus transfer completion')
-
-
 class CP2112Device:
     """High-level CP2112 device helper."""
 
@@ -737,29 +747,41 @@ class CP2112Device:
                 raise CP2112Error('target_address must be bytes, list, or hex string')
             _validate_length(len(target_bytes), HID_SMBUS_MIN_TARGET_ADDRESS_SIZE, HID_SMBUS_MAX_TARGET_ADDRESS_SIZE, 'target_address')
             address_read_request(self.device, slave_address, num_bytes, len(target_bytes), target_bytes)
-        wait_for_transfer(self.device)
-        response = get_read_response(self.device, buffer_size=max(num_bytes, HID_SMBUS_MAX_READ_RESPONSE_SIZE))
-        return response['data']
+
+        transfer_status = wait_for_transfer(self.device)
+        if transfer_status['status'] == HID_SMBUS_S0_ERROR:
+            raise CP2112Error(f'Read transfer error: {transfer_status}')
+
+        buffer_size = max(num_bytes, HID_SMBUS_MAX_READ_RESPONSE_SIZE)
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            force_read_response(self.device, num_bytes)
+            time.sleep(0.01 * (attempt + 1))
+            response = get_read_response(self.device, buffer_size=buffer_size)
+            if response['status'] == HID_SMBUS_SUCCESS:
+                if response['num_bytes_read'] >= num_bytes:
+                    return response['data'][:num_bytes]
+                else:
+                    logger.warning(f"Read incomplete: got {response['num_bytes_read']} bytes, expected {num_bytes}")
+                    if attempt == max_attempts - 1:
+                        return response['data']
+            else:
+                logger.debug(f"GetReadResponse attempt {attempt+1} status: {response['status']}")
+                if attempt == max_attempts - 1:
+                    raise CP2112Error(f"GetReadResponse failed after {max_attempts} attempts: {response['status']}")
+        raise CP2112Error("Unexpected error in read()")
 
     def write(self, slave_address, data):
         _validate_address(slave_address)
-        status = write_request(self.device, slave_address, data)
-        if status is not True:
-            return status
+        write_request(self.device, slave_address, data)
         transfer_status = wait_for_transfer(self.device)
         if transfer_status['status'] == HID_SMBUS_S0_ERROR:
             raise CP2112Error(f'Write failed: {transfer_status}')
         return transfer_status
 
     def write_register(self, slave_address, register_address, data):
-        _validate_address(slave_address)
-        status = write_register(self.device, slave_address, register_address, data)
-        if status is not True:
-            return status
-        transfer_status = wait_for_transfer(self.device)
-        if transfer_status['status'] == HID_SMBUS_S0_ERROR:
-            raise CP2112Error(f'Register write failed: {transfer_status}')
-        return transfer_status
+        # Ahora write_register ya maneja la espera y lanza excepción detallada
+        return write_register(self.device, slave_address, register_address, data)
 
     def unseal(self, slave_address, key1=DEFAULT_SMART_BATTERY_UNSEAL_KEYS[0], key2=DEFAULT_SMART_BATTERY_UNSEAL_KEYS[1]):
         self.write_register(slave_address, 0x00, key1.to_bytes(2, 'little'))
@@ -772,7 +794,6 @@ class CP2112Device:
         return True
 
     def reset_battery(self, slave_address):
-        """Send SBS ManufacturerAccess reset command (0x0041). Battery must be unsealed."""
         self.write_register(slave_address, 0x00, (0x0041).to_bytes(2, 'little'))
         return True
 

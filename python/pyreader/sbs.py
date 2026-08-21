@@ -134,7 +134,7 @@ def _decode_battery_status(value: int) -> str:
     if value & 0x0002:
         bits.append('TerminateCharge')
     if value & 0x0004:
-        bits.append('Overtemp')
+        bits.append('Overtemp')          # Flag, but we will not rely on it alone for alerts
     if value & 0x0008:
         bits.append('TerminateDischarge')
     if value & 0x0010:
@@ -253,9 +253,13 @@ def cell_imbalance_mv(raw_data: dict[str, bytes]) -> int | None:
 
 
 def assess_battery_health(raw_data: dict[str, bytes]) -> list[tuple[str, str]]:
-    """Return list of (severity, message) where severity is info|warning|critical."""
+    """
+    Return list of (severity, message) where severity is info|warning|critical.
+    Fixed to avoid false overtemperature from BatteryStatus flag.
+    """
     alerts: list[tuple[str, str]] = []
 
+    # ---- SOH ----
     soh, _ = calculate_soh(raw_data)
     if soh is not None:
         if soh < 50:
@@ -263,6 +267,7 @@ def assess_battery_health(raw_data: dict[str, bytes]) -> list[tuple[str, str]]:
         elif soh < 70:
             alerts.append(('warning', f'Degraded capacity (SOH {soh:.0f}%)'))
 
+    # ---- Cycle count ----
     cycles = word_value(raw_data.get('CycleCount'))
     if cycles is not None:
         if cycles >= 800:
@@ -270,10 +275,12 @@ def assess_battery_health(raw_data: dict[str, bytes]) -> list[tuple[str, str]]:
         elif cycles >= 500:
             alerts.append(('warning', f'Elevated cycle count ({cycles})'))
 
+    # ---- Max error ----
     max_error = word_value(raw_data.get('MaxError'))
     if max_error is not None and max_error > 10:
         alerts.append(('warning', f'Gas gauge max error is {max_error}%'))
 
+    # ---- Cell imbalance ----
     delta = cell_imbalance_mv(raw_data)
     if delta is not None:
         if delta > 60:
@@ -281,28 +288,47 @@ def assess_battery_health(raw_data: dict[str, bytes]) -> list[tuple[str, str]]:
         elif delta > 30:
             alerts.append(('warning', f'Moderate cell imbalance ({delta} mV)'))
 
+    # ---- BatteryStatus flags (excluding overtemperature flag, we rely on actual temperature) ----
     status = word_value(raw_data.get('BatteryStatus'))
     if status is not None:
+        # Overcharged flag (0x0001) - can be false, but we'll report as warning
         if status & 0x0001:
-            alerts.append(('critical', 'Battery status: Overcharged'))
-        if status & 0x0004:
-            alerts.append(('critical', 'Battery status: Overtemperature'))
+            alerts.append(('warning', 'Battery status: Overcharged (flag set)'))
+        # Terminate discharge (0x0008)
         if status & 0x0008:
             alerts.append(('warning', 'Battery status: Terminate discharge active'))
+        # Fully discharged (0x0200)
         if status & 0x0200:
-            alerts.append(('warning', 'Battery status: Fully discharged'))
+            alerts.append(('info', 'Battery status: Fully discharged'))
+        # Terminate charge (0x0002)
+        if status & 0x0002:
+            alerts.append(('info', 'Battery status: Terminate charge'))
+        # Overcurrent (0x0004?) Actually 0x0004 is Overtemp flag, we skip it.
+        # Instead we check temperature below.
 
+    # ---- Temperature based on actual reading ----
+    temp_raw = word_value(raw_data.get('Temperature'))
+    if temp_raw is not None:
+        temp_c = (temp_raw / 10.0) - 273.15
+        if temp_c > 55:
+            alerts.append(('critical', f'High pack temperature ({temp_c:.1f} °C)'))
+        elif temp_c > 45:
+            alerts.append(('warning', f'Elevated pack temperature ({temp_c:.1f} °C)'))
+        elif temp_c < -10:
+            alerts.append(('warning', f'Low pack temperature ({temp_c:.1f} °C)'))
+
+    # ---- SOC ----
     soc = word_value(raw_data.get('RelativeStateOfCharge'))
     if soc is not None and soc < 10:
         alerts.append(('info', f'Low state of charge ({soc}%)'))
 
-    temp_raw = word_value(raw_data.get('Temperature'))
-    if temp_raw is not None:
-        temp_c = (temp_raw / 10.0) - 273.15
-        if temp_c > 50:
-            alerts.append(('critical', f'High pack temperature ({temp_c:.1f} °C)'))
-        elif temp_c > 45:
-            alerts.append(('warning', f'Elevated pack temperature ({temp_c:.1f} °C)'))
+    # ---- Voltage sanity ----
+    voltage = word_value(raw_data.get('Voltage'))
+    if voltage is not None:
+        # Typically Li-ion nominal per cell ~3.7V, so assume 3 cells => ~11.1V, 4 cells => 14.8V
+        # We'll just check if voltage is below 6V (may indicate connection issue or deep discharge)
+        if voltage < 6000:
+            alerts.append(('warning', f'Low pack voltage ({voltage/1000:.2f}V)'))
 
     if not alerts:
         alerts.append(('info', 'No health issues detected'))
